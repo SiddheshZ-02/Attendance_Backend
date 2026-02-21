@@ -390,9 +390,47 @@ const getAttendanceHistory = async (req, res) => {
 };
 
 
+// ═════════════════════════════════════════════════════════════════
+// @desc    Get office location for user reference
+// @route   GET /api/attendance/office-location
+// @access  Private
+// ═════════════════════════════════════════════════════════════════
+const getOfficeLocation = async (req, res) => {
+  try {
+    const officeLocation = await OfficeLocation.findOne({ isActive: true });
+
+    if (!officeLocation) {
+      return res.status(404).json({
+        success: false,
+        code: 'OFFICE_NOT_CONFIGURED',
+        message: 'Office location is not configured. Please contact admin.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      officeLocation: {
+        name: officeLocation.name,
+        address: officeLocation.address,
+        location: officeLocation.location,
+        radius: officeLocation.radius,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Get office location error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+
 module.exports = {
   checkIn,
   checkOut,
   getTodayAttendance,
   getAttendanceHistory,
+  getOfficeLocation,
 };
