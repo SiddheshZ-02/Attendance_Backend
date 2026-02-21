@@ -542,7 +542,7 @@ const getOfficeLocation = async (req, res) => {
         name: 'Main Office',
         location: {
           type: 'Point',
-          coordinates: [72.050573, 19.182175], // [lng, lat] — Diva, Maharashtra
+          coordinates: [72.8856, 19.0748], // [lng, lat] — Diva, Maharashtra
         },
         radius: 50,
         address: 'Diva, Maharashtra, India',
