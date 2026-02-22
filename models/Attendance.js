@@ -78,7 +78,7 @@ const attendanceSchema = new mongoose.Schema(
 
     // ─── Date (YYYY-MM-DD) ────────────────────────────────────────
     // Stored as a plain string so date-range queries are simple
-    // and timezone issues (server vs device) are avoided.
+    // and timezone issues are avoided.
     date: {
       type: String,
       required: true,

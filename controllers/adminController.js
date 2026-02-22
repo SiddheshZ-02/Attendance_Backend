@@ -56,7 +56,7 @@ const getAllEmployees = async (req, res) => {
     const totalCount = await User.countDocuments(query);
 
     const employees = await User.find(query)
-      .select('-password -devices')
+      .select('-password')
       .sort({ name: 1 })
       .skip(skip)
       .limit(Number(limit))
@@ -91,7 +91,7 @@ const getAllEmployees = async (req, res) => {
 const getEmployeeById = async (req, res) => {
   try {
     const employee = await User.findById(req.params.id)
-      .select('-password -devices')
+      .select('-password')
       .lean();
 
     if (!employee) {
@@ -226,7 +226,7 @@ const createEmployee = async (req, res) => {
 
     // Return employee without sensitive fields
     const employeeResponse = await User.findById(employee._id)
-      .select('-password -devices')
+      .select('-password')
       .lean();
 
     return res.status(201).json({

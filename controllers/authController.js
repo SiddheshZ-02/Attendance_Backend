@@ -23,14 +23,13 @@ const sanitizeUser = (user) => ({
 // @desc    Login user
 // @route   POST /api/auth/login
 // @access  Public
-// Body:    { email, password, deviceInfo, location }
+// Body:    { email, password, location }
 //
-// deviceInfo = { deviceId, deviceName, platform, brand, model, ... }
 // location   = { latitude, longitude, accuracy } | null
 // ═════════════════════════════════════════════════════════════════════════════
 const loginUser = async (req, res) => {
   try {
-    const { email, password, deviceInfo, location } = req.body;
+    const { email, password, location } = req.body;
 
     // ── 1. Validate required credentials ─────────────────────────
     if (!email || !password) {
@@ -41,15 +40,6 @@ const loginUser = async (req, res) => {
         success: false,
         code: 'MISSING_CREDENTIALS',
         message: 'Please provide email and password.',
-      });
-    }
-
-    // ── 2. Device info is required (from the app) ─────────────────
-    if (!deviceInfo || !deviceInfo.deviceId) {
-      return res.status(400).json({
-        success: false,
-        code: 'DEVICE_INFO_REQUIRED',
-        message: 'Device information is required.',
       });
     }
 
@@ -75,67 +65,21 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // ── 5. Check account locked (MUST check before matchPassword) ─
-    if (user.isLocked) {
-      const remainingMs = user.lockUntil - Date.now();
-      const remainingMins = Math.ceil(remainingMs / 60000);
-      securityLogger.authFailure(email, req.ip, req.get('User-Agent'), 'ACCOUNT_LOCKED');
-      return res.status(401).json({
-        success: false,
-        code: 'ACCOUNT_LOCKED',
-        message: `Your account is temporarily locked due to multiple failed login attempts. Try again in ${remainingMins} minute(s).`,
-        retryAfterMinutes: remainingMins,
-      });
-    }
-
-    // ── 6. Verify password ────────────────────────────────────────
+    // ── 5. Verify password ────────────────────────────────────────
     const isMatch = await user.matchPassword(password);
 
     if (!isMatch) {
-      // Reload user to get updated loginAttempts from DB
-      const refreshed = await User.findById(user._id).select('loginAttempts lockUntil');
-      const attemptsLeft = Math.max(0, 5 - (refreshed.loginAttempts || 0));
-
       securityLogger.authFailure(email, req.ip, req.get('User-Agent'), 'INVALID_PASSWORD');
 
       return res.status(401).json({
         success: false,
         code: 'INVALID_CREDENTIALS',
-        message:
-          attemptsLeft === 0
-            ? 'Account locked due to too many failed attempts. Try again in 30 minutes.'
-            : `Invalid email or password. ${attemptsLeft} attempt(s) remaining before lockout.`,
-        attemptsLeft,
+        message: 'Invalid email or password.',
       });
     }
 
-    // ── 7. Handle device registration ─────────────────────────────
-    const { isNew: isNewDevice, limitReached } = await user.registerDevice(deviceInfo);
-
-    if (limitReached) {
-      return res.status(400).json({
-        success: false,
-        code: 'MAX_DEVICES_REACHED',
-        message:
-          'You have reached the maximum number of registered devices (3). Please remove a device from your account settings.',
-        registeredDevices: user.devices.map((d) => ({
-          deviceId: d.deviceId,
-          deviceName: d.deviceName,
-          platform: d.platform,
-          addedAt: d.addedAt,
-          lastUsedAt: d.lastUsedAt,
-        })),
-      });
-    }
-
-    // ── 8. Build warnings for frontend ────────────────────────────
+    // ── 6. Build warnings for frontend ────────────────────────────
     const warnings = {};
-
-    if (isNewDevice) {
-      warnings.newDevice = true;
-      warnings.message =
-        'This device has been registered to your account. If this was not you, please contact support immediately.';
-    }
 
     // Simple location anomaly: if user sends location and it's
     // outside India (rough bounds) flag it as suspicious
@@ -150,7 +94,7 @@ const loginUser = async (req, res) => {
         warnings.suspiciousLocation = true;
         warnings.message =
           warnings.message ||
-          'Unusual login location detected. If this was not you, please contact support.';
+          'Unusual login location detected.';
 
         securityLogger.suspiciousActivity(req.ip, req.get('User-Agent'), 'UNUSUAL_LOGIN_LOCATION', {
           userId: user._id,
@@ -159,7 +103,7 @@ const loginUser = async (req, res) => {
       }
     }
 
-    // ── 9. Generate token & respond ───────────────────────────────
+    // ── 8. Generate token & respond ───────────────────────────────
     securityLogger.authSuccess(user._id, req.ip, req.get('User-Agent'));
 
     const token = generateToken(user._id);
@@ -191,22 +135,13 @@ const loginUser = async (req, res) => {
 
 
 // ═════════════════════════════════════════════════════════════════════════════
-// @desc    Logout user (removes current device from registered devices)
+// @desc    Logout user
 // @route   POST /api/auth/logout
 // @access  Private
-// Body:    { deviceId }
 // ═════════════════════════════════════════════════════════════════════════════
 const logoutUser = async (req, res) => {
   try {
-    const { deviceId } = req.body;
 
-    if (deviceId) {
-      // Remove this specific device from the user's registered devices
-      await User.updateOne(
-        { _id: req.user._id },
-        { $pull: { devices: { deviceId } } }
-      );
-    }
 
     securityLogger.authSuccess(req.user._id, req.ip, req.get('User-Agent'));
 
@@ -441,8 +376,6 @@ const resetPassword = async (req, res) => {
     user.password = newPassword; // pre-save hook hashes it
     user.passwordResetToken = null;
     user.passwordResetExpires = null;
-    user.loginAttempts = 0; // unlock account if it was locked
-    user.lockUntil = null;
 
     await user.save();
 
@@ -461,72 +394,6 @@ const resetPassword = async (req, res) => {
 };
 
 
-// ═════════════════════════════════════════════════════════════════════════════
-// @desc    Get registered devices for current user
-// @route   GET /api/auth/devices
-// @access  Private
-// ═════════════════════════════════════════════════════════════════════════════
-const getMyDevices = async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id).select('devices').lean();
-
-    return res.json({
-      success: true,
-      devices: user.devices || [],
-      totalDevices: (user.devices || []).length,
-      maxDevices: 3,
-    });
-  } catch (error) {
-    securityLogger.systemError(error, req);
-    return res.status(500).json({
-      success: false,
-      code: 'SERVER_ERROR',
-      message: 'Failed to retrieve devices.',
-    });
-  }
-};
-
-
-// ═════════════════════════════════════════════════════════════════════════════
-// @desc    Remove a registered device
-// @route   DELETE /api/auth/devices/:deviceId
-// @access  Private
-// ═════════════════════════════════════════════════════════════════════════════
-const removeDevice = async (req, res) => {
-  try {
-    const { deviceId } = req.params;
-
-    const user = await User.findById(req.user._id).select('devices');
-
-    const deviceExists = user.devices.some((d) => d.deviceId === deviceId);
-    if (!deviceExists) {
-      return res.status(404).json({
-        success: false,
-        code: 'DEVICE_NOT_FOUND',
-        message: 'Device not found in your account.',
-      });
-    }
-
-    await User.updateOne(
-      { _id: req.user._id },
-      { $pull: { devices: { deviceId } } }
-    );
-
-    return res.json({
-      success: true,
-      message: 'Device removed successfully.',
-    });
-  } catch (error) {
-    securityLogger.systemError(error, req);
-    return res.status(500).json({
-      success: false,
-      code: 'SERVER_ERROR',
-      message: 'Failed to remove device.',
-    });
-  }
-};
-
-
 module.exports = {
   loginUser,
   logoutUser,
@@ -534,6 +401,4 @@ module.exports = {
   updateUserProfile,
   forgotPassword,
   resetPassword,
-  getMyDevices,
-  removeDevice,
 };

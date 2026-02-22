@@ -2,43 +2,6 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 
-// ─── Device Sub-Schema ─────────────────────────────────────────────────────────
-// Each user can register up to MAX_DEVICES devices.
-// deviceId = the fingerprint sent by the app (from deviceInfo.deviceId)
-const deviceSchema = new mongoose.Schema(
-  {
-    deviceId: {
-      type: String,
-      required: true,
-    },
-    deviceName: {
-      type: String,
-      default: 'Unknown Device',
-    },
-    platform: {
-      type: String,
-      enum: ['android', 'ios', 'web', 'unknown'],
-      default: 'unknown',
-    },
-    brand: {
-      type: String,
-      default: '',
-    },
-    model: {
-      type: String,
-      default: '',
-    },
-    addedAt: {
-      type: Date,
-      default: Date.now,
-    },
-    lastUsedAt: {
-      type: Date,
-      default: Date.now,
-    },
-  },
-  { _id: false } // no separate _id for sub-documents
-);
 
 // ─── User Schema ───────────────────────────────────────────────────────────────
 const userSchema = new mongoose.Schema(
@@ -98,28 +61,12 @@ const userSchema = new mongoose.Schema(
       default: true,
     },
 
-    // ── Login Security ─────────────────────────────────────────────
-    // loginAttempts & lockUntil handle brute-force protection
-    loginAttempts: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
-    lockUntil: {
-      type: Number, // Unix timestamp (ms) — when the lock expires
-      default: null,
-    },
+
     lastLoginAt: {
       type: Date,
       default: null,
     },
 
-    // ── Device Management ──────────────────────────────────────────
-    // Max 3 registered devices per user (MAX_DEVICES_REACHED error)
-    devices: {
-      type: [deviceSchema],
-      default: [],
-    },
 
     // ── Password Reset ─────────────────────────────────────────────
     passwordChangedAt: {
@@ -140,16 +87,6 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// ─── Constants ─────────────────────────────────────────────────────────────────
-const MAX_DEVICES = 3;
-const MAX_LOGIN_ATTEMPTS = 5;
-const LOCK_DURATION_MS = 30 * 60 * 1000; // 30 minutes
-
-// ─── Virtual: isLocked ─────────────────────────────────────────────────────────
-// Returns true if the account is currently locked
-userSchema.virtual('isLocked').get(function () {
-  return !!(this.lockUntil && this.lockUntil > Date.now());
-});
 
 // ─── Pre-Save: Hash Password ───────────────────────────────────────────────────
 // userSchema.pre('save', async function (next) {
@@ -178,38 +115,18 @@ userSchema.pre('save', async function () {
 
 
 // ─── Method: matchPassword ─────────────────────────────────────────────────────
-// Returns true/false — does NOT throw on lock (caller must check isLocked first)
+// Returns true/false for password comparison
 userSchema.methods.matchPassword = async function (enteredPassword) {
   const isMatch = await bcrypt.compare(enteredPassword, this.password);
-
+  
   if (isMatch) {
-    // ── Success: reset lockout state ──────────────────────────────
+    // Update last login timestamp
     await this.constructor.updateOne(
       { _id: this._id },
-      {
-        $set: {
-          loginAttempts: 0,
-          lockUntil: null,
-          lastLoginAt: new Date(),
-        },
-      }
-    );
-  } else {
-    // ── Failure: increment attempts, lock if threshold reached ────
-    const newAttempts = (this.loginAttempts || 0) + 1;
-    const shouldLock = newAttempts >= MAX_LOGIN_ATTEMPTS;
-
-    await this.constructor.updateOne(
-      { _id: this._id },
-      {
-        $set: {
-          loginAttempts: newAttempts,
-          lockUntil: shouldLock ? Date.now() + LOCK_DURATION_MS : null,
-        },
-      }
+      { $set: { lastLoginAt: new Date() } }
     );
   }
-
+  
   return isMatch;
 };
 
@@ -243,52 +160,6 @@ userSchema.methods.createPasswordResetToken = function () {
   return resetToken; // return raw — sent to user via email
 };
 
-// ─── Method: registerDevice ───────────────────────────────────────────────────
-// Registers a new device or updates lastUsedAt if already registered.
-// Returns: { isNew: bool, limitReached: bool }
-userSchema.methods.registerDevice = async function (deviceInfo) {
-  if (!deviceInfo || !deviceInfo.deviceId) {
-    return { isNew: false, limitReached: false };
-  }
-
-  const existingIndex = this.devices.findIndex(
-    (d) => d.deviceId === deviceInfo.deviceId
-  );
-
-  if (existingIndex !== -1) {
-    // Device already registered — just update lastUsedAt
-    await this.constructor.updateOne(
-      { _id: this._id, 'devices.deviceId': deviceInfo.deviceId },
-      { $set: { 'devices.$.lastUsedAt': new Date() } }
-    );
-    return { isNew: false, limitReached: false };
-  }
-
-  // New device — check limit
-  if (this.devices.length >= MAX_DEVICES) {
-    return { isNew: true, limitReached: true };
-  }
-
-  // Register new device
-  await this.constructor.updateOne(
-    { _id: this._id },
-    {
-      $push: {
-        devices: {
-          deviceId: deviceInfo.deviceId,
-          deviceName: deviceInfo.deviceName || 'Unknown Device',
-          platform: deviceInfo.platform || 'unknown',
-          brand: deviceInfo.brand || '',
-          model: deviceInfo.model || '',
-          addedAt: new Date(),
-          lastUsedAt: new Date(),
-        },
-      },
-    }
-  );
-
-  return { isNew: true, limitReached: false };
-};
 
 userSchema.index({ role: 1, isActive: 1 }); 
 

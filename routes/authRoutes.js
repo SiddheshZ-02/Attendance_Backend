@@ -7,14 +7,12 @@ const {
   updateUserProfile,
   forgotPassword,
   resetPassword,
-  getMyDevices,
-  removeDevice,
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 
 // ─── Auth Routes ───────────────────────────────────────────────────────────────
-// POST /api/auth/login           → login with email + password + deviceInfo
-// POST /api/auth/logout          → logout (removes current device) [Protected]
+// POST /api/auth/login           → login with email + password
+// POST /api/auth/logout          → logout [Protected]
 router.post('/login', loginUser);
 router.post('/logout', protect, logoutUser);
 
@@ -32,10 +30,5 @@ router
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
 
-// ─── Device Management Routes ──────────────────────────────────────────────────
-// GET    /api/auth/devices           → list all registered devices [Protected]
-// DELETE /api/auth/devices/:deviceId → remove a specific device [Protected]
-router.get('/devices', protect, getMyDevices);
-router.delete('/devices/:deviceId', protect, removeDevice);
 
 module.exports = router;
