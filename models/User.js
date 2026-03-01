@@ -49,7 +49,13 @@ const userSchema = new mongoose.Schema(
       trim: true,
       maxlength: 100,
     },
-    phoneNumber: {
+    position: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 100,
+    },
+    phone: {
       type: String,
       default: '',
       trim: true,
@@ -88,27 +94,15 @@ const userSchema = new mongoose.Schema(
 );
 
 
-// ─── Pre-Save: Hash Password ───────────────────────────────────────────────────
-// userSchema.pre('save', async function (next) {
-//   if (!this.isModified('password')) return next();
-
-//   try {
-//     const salt = await bcrypt.genSalt(10);
-//     this.password = await bcrypt.hash(this.password, salt);
-//     // Record time of password change (used by JWT validation)
-//     this.passwordChangedAt = new Date();
-//     next();
-//   } catch (error) {
-//     next(error);
-//   }
-// });
 
 userSchema.pre('save', async function () {
   if (!this.isModified('password')) return;
-
+  if (this.password && /^\$2[aby]\$/.test(this.password)) {
+    this.passwordChangedAt = new Date();
+    return;
+  }
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
-  // Record time of password change (used by JWT validation)
   this.passwordChangedAt = new Date();
 });
 

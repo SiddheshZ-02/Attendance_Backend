@@ -13,7 +13,7 @@ const sanitizeUser = (user) => ({
   role: user.role,
   employeeId: user.employeeId,
   department: user.department,
-  phoneNumber: user.phoneNumber,
+  phone: user.phone,
   isActive: user.isActive,
   lastLoginAt: user.lastLoginAt,
 });
@@ -202,7 +202,7 @@ const getUserProfile = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════════════════
 const updateUserProfile = async (req, res) => {
   try {
-    const { name, phoneNumber, department, currentPassword, newPassword } = req.body;
+    const { name, phone, phoneNumber, department, currentPassword, newPassword } = req.body;
 
     const user = await User.findById(req.user._id);
 
@@ -216,8 +216,9 @@ const updateUserProfile = async (req, res) => {
 
     // ── Update basic fields ───────────────────────────────────────
     if (name) user.name = name.trim();
-    if (phoneNumber !== undefined) user.phoneNumber = phoneNumber.trim();
-    if (department !== undefined) user.department = department.trim();
+    if (phone !== undefined && String(phone).trim() !== '') user.phone = String(phone).trim();
+    else if (phoneNumber !== undefined && String(phoneNumber).trim() !== '') user.phone = String(phoneNumber).trim();
+    if (department !== undefined) user.department = String(department).trim();
 
     // ── Password change (requires current password verification) ──
     if (newPassword) {

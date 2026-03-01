@@ -11,11 +11,20 @@ const submitLeaveRequest = async (req, res) => {
     const { startDate, endDate, reason, leaveType } = req.body;
 
     // ── 1. Validate required fields ───────────────────────────────
-    if (!startDate || !endDate || !reason) {
+    if (!startDate || !endDate || !reason || !leaveType) {
       return res.status(400).json({
         success: false,
         code: 'MISSING_FIELDS',
-        message: 'startDate, endDate, and reason are required.',
+        message: 'startDate, endDate, reason, and leaveType are required.',
+      });
+    }
+
+    const allowedLeaveTypes = ['sick', 'casual', 'vacation', 'other'];
+    if (leaveType && !allowedLeaveTypes.includes(leaveType)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_LEAVE_TYPE',
+        message: `Invalid leaveType. Must be one of: ${allowedLeaveTypes.join(', ')}.`,
       });
     }
 
@@ -81,8 +90,10 @@ const submitLeaveRequest = async (req, res) => {
       });
     }
 
+    const diffMs = end - start;
+    const totalDays = Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1;
+
     // ── 4. Create leave request ───────────────────────────────────
-    // totalDays is auto-calculated via pre-save hook in the model
     const leaveRequest = await LeaveRequest.create({
       userId: req.user._id,
       startDate: start,
@@ -90,6 +101,7 @@ const submitLeaveRequest = async (req, res) => {
       reason: reason.trim(),
       leaveType: leaveType || 'casual',
       status: 'pending',
+      totalDays,
     });
 
     return res.status(201).json({

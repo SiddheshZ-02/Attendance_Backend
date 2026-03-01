@@ -67,14 +67,7 @@ const leaveRequestSchema = new mongoose.Schema(
 );
 
 // ─── Auto-calculate totalDays before save ─────────────────────────
-leaveRequestSchema.pre('save', function (next) {
-  if (this.startDate && this.endDate) {
-    const diffMs = new Date(this.endDate) - new Date(this.startDate);
-    // +1 to include both start and end day
-    this.totalDays = Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1;
-  }
-  next();
-});
+// Disabled hook; totalDays is now calculated in the controller.
 
 // ─── Indexes ──────────────────────────────────────────────────────
 leaveRequestSchema.index({ userId: 1, status: 1 });

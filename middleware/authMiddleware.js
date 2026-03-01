@@ -56,20 +56,10 @@ const protect = async (req, res, next) => {
       });
     }
 
-    // ── 5. Check if account is locked ──────────────────────────
-    if (user.isLocked) {
-      const remainingMs = user.lockUntil - Date.now();
-      const remainingMins = Math.ceil(remainingMs / 60000);
-      securityLogger.authFailure(user.email, req.ip, req.get('User-Agent'), 'LOCKED_ACCOUNT_ACCESS');
-      return res.status(401).json({
-        success: false,
-        code: 'ACCOUNT_LOCKED',
-        message: `Account temporarily locked. Try again in ${remainingMins} minute(s).`,
-        retryAfterMinutes: remainingMins,
-      });
-    }
+    
+  
 
-    // ── 6. Check if password was changed after JWT was issued ───
+    // ── 5. Check if password was changed after JWT was issued ───
     if (decoded.iat && user.changedPasswordAfter(decoded.iat)) {
       return res.status(401).json({
         success: false,
@@ -78,7 +68,7 @@ const protect = async (req, res, next) => {
       });
     }
 
-    // ── 7. Attach user and proceed ──────────────────────────────
+    // ── 6. Attach user and proceed ──────────────────────────────
     req.user = user;
     next();
   } catch (error) {

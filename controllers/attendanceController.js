@@ -1,5 +1,6 @@
 const Attendance = require('../models/Attendance');
 const OfficeLocation = require('../models/OfficeLocation');
+const WeekOffConfig = require('../models/WeekOffConfig');
 const { calculateDistance, formatDate, calculateWorkingHours } = require('../utils/helpers');
 
 // ─────────────────────────────────────────────────────────────────
@@ -389,6 +390,111 @@ const getAttendanceHistory = async (req, res) => {
   }
 };
 
+const getAttendanceCalendar = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    let rangeStart;
+    let rangeEnd;
+
+    if (startDate && endDate) {
+      rangeStart = startDate;
+      rangeEnd = endDate;
+    } else {
+      const now = new Date();
+      const first = new Date(now.getFullYear(), now.getMonth(), 1);
+      const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      rangeStart = formatDate(first);
+      rangeEnd = formatDate(last);
+    }
+
+    const weekOffConfig = await WeekOffConfig.findOne().lean();
+    const weekOffDays = Array.isArray(weekOffConfig?.daysOfWeek)
+      ? weekOffConfig.daysOfWeek
+      : [0];
+
+    const attendanceRecords = await Attendance.find({
+      userId: req.user._id,
+      date: { $gte: rangeStart, $lte: rangeEnd },
+    })
+      .sort({ date: 1 })
+      .lean();
+
+    const recordsByDate = new Map();
+    attendanceRecords.forEach((r) => {
+      recordsByDate.set(String(r.date), r);
+    });
+
+    const days = [];
+    let presentDays = 0;
+    let leaveDays = 0;
+    let weekOffDaysCount = 0;
+    let totalHoursDecimal = 0;
+
+    const cursor = new Date(rangeStart);
+    const end = new Date(rangeEnd);
+
+    while (cursor <= end) {
+      const dateStr = formatDate(cursor);
+      const weekday = cursor.getDay();
+      const record = recordsByDate.get(dateStr);
+
+      let status;
+      let workMode = null;
+      let checkInTime = null;
+      let checkOutTime = null;
+      let workingHours = 0;
+
+      if (record) {
+        status = 'Present';
+        workMode = record.workMode || null;
+        checkInTime = record.checkInTime || null;
+        checkOutTime = record.checkOutTime || null;
+        workingHours = record.workingHours || 0;
+        presentDays += 1;
+        totalHoursDecimal += workingHours;
+      } else if (weekOffDays.includes(weekday)) {
+        status = 'Week Off';
+        weekOffDaysCount += 1;
+      } else {
+        status = 'Leave';
+        leaveDays += 1;
+      }
+
+      days.push({
+        date: dateStr,
+        status,
+        workMode,
+        checkInTime,
+        checkOutTime,
+        workingHours,
+      });
+
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    const statistics = {
+      presentDays,
+      leaveDays,
+      weekOffDays: weekOffDaysCount,
+      totalHours: formatHours(totalHoursDecimal),
+    };
+
+    return res.json({
+      success: true,
+      days,
+      statistics,
+    });
+  } catch (error) {
+    console.error('❌ Get attendance calendar error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
 
 // ═════════════════════════════════════════════════════════════════
 // @desc    Get office location for user reference
@@ -433,4 +539,5 @@ module.exports = {
   getTodayAttendance,
   getAttendanceHistory,
   getOfficeLocation,
+  getAttendanceCalendar,
 };

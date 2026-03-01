@@ -2,9 +2,15 @@ const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const OfficeLocation = require('../models/OfficeLocation');
 const LeaveRequest = require('../models/LeaveRequest');
+const Department = require('../models/Department');
+const WeekOffConfig = require('../models/WeekOffConfig');
 const { formatDate } = require('../utils/helpers');
 const { generateToken } = require('../utils/helpers');
-const bcrypt = require('bcryptjs');
+
+let statisticsCache = {
+  data: null,
+  expiresAt: 0,
+};
 
 // ─────────────────────────────────────────────────────────────────
 // HELPER — format working hours number → "Xh YYm"
@@ -83,6 +89,190 @@ const getAllEmployees = async (req, res) => {
 };
 
 
+const getAdmins = async (req, res) => {
+  try {
+    const admins = await User.find({
+      role: { $in: ['admin', 'manager'] },
+    })
+      .select('-password -passwordResetToken -passwordResetExpires')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      admins,
+    });
+  } catch (error) {
+    console.error('❌ Get admins error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+
+const createAdminAccount = async (req, res) => {
+  try {
+    const { name, email, password, department, role, position } = req.body;
+
+    if (!name || !email || !password || !role) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_FIELDS',
+        message: 'name, email, password and role are required.',
+      });
+    }
+
+    const normalizedRole =
+      role === 'manager' || role === 'admin' ? role : 'admin';
+
+    const existingEmail = await User.findOne({
+      email: email.trim().toLowerCase(),
+    });
+    if (existingEmail) {
+      return res.status(400).json({
+        success: false,
+        code: 'EMAIL_EXISTS',
+        message: 'An account with this email already exists.',
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        code: 'WEAK_PASSWORD',
+        message: 'Password must be at least 6 characters.',
+      });
+    }
+
+    const adminUser = await User.create({
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      password,
+      department: department?.trim() || '',
+      position: position?.trim() || '',
+      role: normalizedRole,
+      isActive: true,
+    });
+
+    const adminResponse = await User.findById(adminUser._id)
+      .select('-password -passwordResetToken -passwordResetExpires')
+      .lean();
+
+    return res.status(201).json({
+      success: true,
+      message: 'Admin account created successfully.',
+      admin: adminResponse,
+    });
+  } catch (error) {
+    console.error('❌ Create admin error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+
+const updateAdminAccount = async (req, res) => {
+  try {
+    const { name, email, department, isActive, role, position } = req.body;
+
+    const adminUser = await User.findById(req.params.id);
+
+    if (!adminUser || !['admin', 'manager'].includes(adminUser.role)) {
+      return res.status(404).json({
+        success: false,
+        code: 'NOT_FOUND',
+        message: 'Admin account not found.',
+      });
+    }
+
+    if (email && email.trim().toLowerCase() !== adminUser.email.toLowerCase()) {
+      const existingEmail = await User.findOne({
+        email: email.trim().toLowerCase(),
+        _id: { $ne: adminUser._id },
+      });
+      if (existingEmail) {
+        return res.status(400).json({
+          success: false,
+          code: 'EMAIL_EXISTS',
+          message: 'An account with this email already exists.',
+        });
+      }
+      adminUser.email = email.trim().toLowerCase();
+    }
+
+    if (name) {
+      adminUser.name = name.trim();
+    }
+    if (department !== undefined) {
+      adminUser.department = String(department).trim();
+    }
+    if (position !== undefined) {
+      adminUser.position = String(position).trim();
+    }
+    if (typeof isActive === 'boolean') {
+      adminUser.isActive = isActive;
+    }
+    if (role && ['admin', 'manager'].includes(role)) {
+      adminUser.role = role;
+    }
+
+    await adminUser.save();
+
+    const adminResponse = await User.findById(adminUser._id)
+      .select('-password -passwordResetToken -passwordResetExpires')
+      .lean();
+
+    return res.json({
+      success: true,
+      message: 'Admin account updated successfully.',
+      admin: adminResponse,
+    });
+  } catch (error) {
+    console.error('❌ Update admin error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+
+const deleteAdminAccount = async (req, res) => {
+  try {
+    const adminUser = await User.findById(req.params.id);
+
+    if (!adminUser || !['admin', 'manager'].includes(adminUser.role)) {
+      return res.status(404).json({
+        success: false,
+        code: 'NOT_FOUND',
+        message: 'Admin account not found.',
+      });
+    }
+
+    await adminUser.deleteOne();
+
+    return res.json({
+      success: true,
+      message: 'Admin account deleted successfully.',
+    });
+  } catch (error) {
+    console.error('❌ Delete admin error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
 // ═════════════════════════════════════════════════════════════════
 // @desc    Get single employee details + attendance summary
 // @route   GET /api/admin/employees/:id
@@ -152,14 +342,162 @@ const getEmployeeById = async (req, res) => {
 
 
 // ═════════════════════════════════════════════════════════════════
+// @desc    Update an existing employee account
+// @route   PUT /api/admin/employees/:id
+// @access  Private/Admin
+// ═════════════════════════════════════════════════════════════════
+const updateEmployeeDetails = async (req, res) => {
+  try {
+    const {
+      name,
+      email,
+      password,
+      employeeId,
+      department,
+      phone,
+      position,
+      isActive,
+    } = req.body;
+
+    const employee = await User.findById(req.params.id);
+
+    if (!employee || employee.role !== 'employee') {
+      return res.status(404).json({
+        success: false,
+        code: 'NOT_FOUND',
+        message: 'Employee not found.',
+      });
+    }
+
+    if (
+      email &&
+      email.trim().toLowerCase() !== employee.email.toLowerCase()
+    ) {
+      const existingEmail = await User.findOne({
+        email: email.trim().toLowerCase(),
+        _id: { $ne: employee._id },
+      });
+      if (existingEmail) {
+        return res.status(400).json({
+          success: false,
+          code: 'EMAIL_EXISTS',
+          message: 'An account with this email already exists.',
+        });
+      }
+      employee.email = email.trim().toLowerCase();
+    }
+
+    if (employeeId && employeeId.trim() !== employee.employeeId) {
+      const existingEmpId = await User.findOne({
+        employeeId: employeeId.trim(),
+        _id: { $ne: employee._id },
+      });
+      if (existingEmpId) {
+        return res.status(400).json({
+          success: false,
+          code: 'EMPLOYEE_ID_EXISTS',
+          message: 'An account with this Employee ID already exists.',
+        });
+      }
+      employee.employeeId = employeeId.trim();
+    }
+
+    if (name) {
+      employee.name = name.trim();
+    }
+    if (department !== undefined) {
+      employee.department = String(department).trim();
+    }
+    if (phone !== undefined) {
+      employee.phone = String(phone).trim();
+    }
+    if (position !== undefined) {
+      employee.position = String(position).trim();
+    }
+    if (typeof isActive === 'boolean') {
+      employee.isActive = isActive;
+    }
+
+    if (password) {
+      if (password.length < 6) {
+        return res.status(400).json({
+          success: false,
+          code: 'WEAK_PASSWORD',
+          message: 'Password must be at least 6 characters.',
+        });
+      }
+      employee.password = password;
+    }
+
+    await employee.save();
+
+    const employeeResponse = await User.findById(employee._id)
+      .select('-password')
+      .lean();
+
+    return res.json({
+      success: true,
+      message: 'Employee updated successfully.',
+      employee: employeeResponse,
+    });
+  } catch (error) {
+    console.error('❌ Update employee error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+
+// ═════════════════════════════════════════════════════════════════
+// @desc    Delete an employee account
+// @route   DELETE /api/admin/employees/:id
+// @access  Private/Admin
+// ═════════════════════════════════════════════════════════════════
+const deleteEmployee = async (req, res) => {
+  try {
+    const employee = await User.findById(req.params.id);
+
+    if (!employee || employee.role !== 'employee') {
+      return res.status(404).json({
+        success: false,
+        code: 'NOT_FOUND',
+        message: 'Employee not found.',
+      });
+    }
+
+    await Attendance.deleteMany({ userId: employee._id });
+    await LeaveRequest.deleteMany({ userId: employee._id });
+
+    await employee.deleteOne();
+
+    return res.json({
+      success: true,
+      message: 'Employee deleted successfully.',
+    });
+  } catch (error) {
+    console.error('❌ Delete employee error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+
+// ═════════════════════════════════════════════════════════════════
 // @desc    Create a new employee account
 // @route   POST /api/admin/employees
 // @access  Private/Admin
-// Body:    { name, email, password, employeeId, department, phone }
+// Body:    { name, email, password, employeeId, department, phone, position }
 // ═════════════════════════════════════════════════════════════════
 const createEmployee = async (req, res) => {
   try {
-    const { name, email, password, employeeId, department, phone } = req.body;
+    const { name, email, password, employeeId, department, phone, position } =
+      req.body;
 
     // ── 1. Validate required fields ───────────────────────────────
     if (!name || !email || !password || !employeeId) {
@@ -208,18 +546,15 @@ const createEmployee = async (req, res) => {
       });
     }
 
-    // ── 5. Hash password ──────────────────────────────────────────
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    // ── 6. Create employee ────────────────────────────────────────
+    // ── 5. Create employee ────────────────────────────────────────
     const employee = await User.create({
       name: name.trim(),
       email: email.trim().toLowerCase(),
-      password: hashedPassword,
+      password,
       employeeId: employeeId.trim(),
       department: department?.trim() || '',
       phone: phone?.trim() || '',
+      position: position?.trim() || '',
       role: 'employee',
       isActive: true,
     });
@@ -370,6 +705,11 @@ const getAllAttendance = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════
 const getAttendanceStatistics = async (req, res) => {
   try {
+    const nowTs = Date.now();
+    if (statisticsCache.data && statisticsCache.expiresAt > nowTs) {
+      return res.json(statisticsCache.data);
+    }
+
     const today = formatDate(new Date());
 
     // ── Today's snapshot ──────────────────────────────────────────
@@ -393,9 +733,9 @@ const getAttendanceStatistics = async (req, res) => {
     ).length;
 
     // ── This month ────────────────────────────────────────────────
-    const now = new Date();
+    const nowDate = new Date();
     const firstDayOfMonth = formatDate(
-      new Date(now.getFullYear(), now.getMonth(), 1)
+      new Date(nowDate.getFullYear(), nowDate.getMonth(), 1)
     );
 
     const monthRecords = await Attendance.find({
@@ -424,7 +764,7 @@ const getAttendanceStatistics = async (req, res) => {
       status: 'approved',
     });
 
-    return res.json({
+    const response = {
       success: true,
       today: {
         totalEmployees,
@@ -446,7 +786,14 @@ const getAttendanceStatistics = async (req, res) => {
         pending: pendingLeaves,
         approved: approvedLeaves,
       },
-    });
+    };
+
+    statisticsCache = {
+      data: response,
+      expiresAt: Date.now() + 30 * 1000,
+    };
+
+    return res.json(response);
   } catch (error) {
     console.error('❌ Get statistics error:', error);
     return res.status(500).json({
@@ -630,6 +977,150 @@ const updateOfficeLocation = async (req, res) => {
   }
 };
 
+// ═════════════════════════════════════════════════════════════════
+// @desc    List all office locations
+// @route   GET /api/admin/office-locations
+// @access  Private/Admin
+// ═════════════════════════════════════════════════════════════════
+const listOfficeLocations = async (req, res) => {
+  try {
+    const items = await OfficeLocation.find({}).sort({ createdAt: -1 }).lean();
+    return res.json({
+      success: true,
+      officeLocations: items,
+    });
+  } catch (error) {
+    console.error('❌ List office locations error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════
+// @desc    Create office location
+// @route   POST /api/admin/office-locations
+// @access  Private/Admin
+// Body:    { name, latitude, longitude, radius, address, isActive? }
+// ═════════════════════════════════════════════════════════════════
+const createOfficeLocationItem = async (req, res) => {
+  try {
+    const { name, latitude, longitude, radius, address, isActive } = req.body;
+    if (!latitude || !longitude) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_COORDINATES',
+        message: 'latitude and longitude are required.',
+      });
+    }
+    if (radius && (isNaN(radius) || Number(radius) < 10 || Number(radius) > 5000)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_RADIUS',
+        message: 'radius must be a number between 10 and 5000 metres.',
+      });
+    }
+
+    // Allow multiple active locations; do not auto-deactivate others
+    // When isActive is true, mark only the created item as active without changing others.
+
+    const created = await OfficeLocation.create({
+      name: name || 'Office',
+      location: {
+        type: 'Point',
+        coordinates: [Number(longitude), Number(latitude)],
+      },
+      radius: radius ? Number(radius) : 50,
+      address: address || '',
+      isActive: isActive === true,
+    });
+
+    return res.status(201).json({
+      success: true,
+      officeLocation: created,
+    });
+  } catch (error) {
+    console.error('❌ Create office location error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════
+// @desc    Update office location by id
+// @route   PUT /api/admin/office-locations/:id
+// @access  Private/Admin
+// ═════════════════════════════════════════════════════════════════
+const updateOfficeLocationById = async (req, res) => {
+  try {
+    const { name, latitude, longitude, radius, address, isActive } = req.body;
+    const item = await OfficeLocation.findById(req.params.id);
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        code: 'NOT_FOUND',
+        message: 'Office location not found.',
+      });
+    }
+    if (latitude !== undefined && longitude !== undefined) {
+      item.location.coordinates = [Number(longitude), Number(latitude)];
+    }
+    if (name !== undefined) item.name = String(name);
+    if (radius !== undefined) item.radius = Number(radius);
+    if (address !== undefined) item.address = String(address);
+    if (isActive !== undefined) {
+      item.isActive = Boolean(isActive);
+      // Allow multiple active locations; do not auto-deactivate others
+    }
+    await item.save();
+    return res.json({
+      success: true,
+      officeLocation: item,
+    });
+  } catch (error) {
+    console.error('❌ Update office location by id error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════
+// @desc    Delete office location by id
+// @route   DELETE /api/admin/office-locations/:id
+// @access  Private/Admin
+// ═════════════════════════════════════════════════════════════════
+const deleteOfficeLocationById = async (req, res) => {
+  try {
+    const item = await OfficeLocation.findById(req.params.id);
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        code: 'NOT_FOUND',
+        message: 'Office location not found.',
+      });
+    }
+    await OfficeLocation.deleteOne({ _id: item._id });
+    return res.json({
+      success: true,
+      message: 'Office location deleted.',
+    });
+  } catch (error) {
+    console.error('❌ Delete office location by id error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
 
 // ═════════════════════════════════════════════════════════════════
 // @desc    Get all leave requests (admin view)
@@ -742,16 +1233,337 @@ const updateLeaveRequest = async (req, res) => {
 };
 
 
+const getDepartments = async (req, res) => {
+  try {
+    const {
+      search,
+      status,
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    const query = {};
+
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { manager: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    if (status && ['Active', 'Inactive'].includes(status)) {
+      query.status = status;
+    }
+
+    const skip = (Number(page) - 1) * Number(limit);
+    const totalCount = await Department.countDocuments(query);
+
+    const departments = await Department.find(query)
+      .sort({ name: 1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .lean();
+
+    const departmentsWithCounts = await Promise.all(
+      departments.map(async (dept) => {
+        const employeeCount = await User.countDocuments({
+          role: 'employee',
+          isActive: true,
+          department: dept.name,
+        });
+        return { ...dept, employeeCount };
+      })
+    );
+
+    return res.json({
+      success: true,
+      departments: departmentsWithCounts,
+      pagination: {
+        total: totalCount,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(totalCount / Number(limit)),
+      },
+    });
+  } catch (error) {
+    console.error('❌ Get departments error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+
+const createDepartment = async (req, res) => {
+  try {
+    const { name, description, manager, status } = req.body;
+
+    if (!name || !description) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_FIELDS',
+        message: 'name and description are required.',
+      });
+    }
+
+    const trimmedName = String(name).trim();
+
+    const existing = await Department.findOne({ name: trimmedName });
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        code: 'DEPARTMENT_EXISTS',
+        message: 'A department with this name already exists.',
+      });
+    }
+
+    const allowedStatus = ['Active', 'Inactive'];
+    let finalStatus = 'Active';
+    if (status && allowedStatus.includes(status)) {
+      finalStatus = status;
+    }
+
+    const managerValue =
+      manager !== undefined && String(manager).trim() !== ''
+        ? String(manager).trim()
+        : '';
+
+    const department = await Department.create({
+      name: trimmedName,
+      description: String(description).trim(),
+      manager: managerValue,
+      status: finalStatus,
+    });
+
+    const employeeCount = await User.countDocuments({
+      role: 'employee',
+      isActive: true,
+      department: department.name,
+    });
+
+    const departmentObject = department.toObject();
+
+    return res.status(201).json({
+      success: true,
+      department: { ...departmentObject, employeeCount },
+    });
+  } catch (error) {
+    console.error('❌ Create department error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+
+const updateDepartmentDetails = async (req, res) => {
+  try {
+    const { name, description, manager, status } = req.body;
+
+    const department = await Department.findById(req.params.id);
+
+    if (!department) {
+      return res.status(404).json({
+        success: false,
+        code: 'NOT_FOUND',
+        message: 'Department not found.',
+      });
+    }
+
+    if (name && name.trim() !== department.name) {
+      const existing = await Department.findOne({ name: name.trim() });
+      if (existing) {
+        return res.status(400).json({
+          success: false,
+          code: 'DEPARTMENT_EXISTS',
+          message: 'A department with this name already exists.',
+        });
+      }
+      department.name = name.trim();
+    }
+
+    if (description !== undefined) {
+      department.description = String(description).trim();
+    }
+
+    if (manager !== undefined) {
+      department.manager = String(manager).trim();
+    }
+
+    if (status) {
+      if (!['Active', 'Inactive'].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_STATUS',
+          message: 'status must be "Active" or "Inactive".',
+        });
+      }
+      department.status = status;
+    }
+
+    await department.save();
+
+    const employeeCount = await User.countDocuments({
+      role: 'employee',
+      isActive: true,
+      department: department.name,
+    });
+
+    const departmentObject = department.toObject();
+
+    return res.json({
+      success: true,
+      department: { ...departmentObject, employeeCount },
+    });
+  } catch (error) {
+    console.error('❌ Update department error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+
+const deleteDepartment = async (req, res) => {
+  try {
+    const department = await Department.findById(req.params.id);
+
+    if (!department) {
+      return res.status(404).json({
+        success: false,
+        code: 'NOT_FOUND',
+        message: 'Department not found.',
+      });
+    }
+
+    const employeeCount = await User.countDocuments({
+      role: 'employee',
+      department: department.name,
+    });
+
+    if (employeeCount > 0) {
+      return res.status(409).json({
+        success: false,
+        code: 'DEPARTMENT_IN_USE',
+        message: 'Cannot delete department while employees are assigned to it.',
+        employeeCount,
+      });
+    }
+
+    await department.deleteOne();
+
+    return res.json({
+      success: true,
+      message: 'Department deleted successfully.',
+    });
+  } catch (error) {
+    console.error('❌ Delete department error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+const getWeekOffConfig = async (req, res) => {
+  try {
+    let config = await WeekOffConfig.findOne().lean();
+    if (!config) {
+      config = await WeekOffConfig.create({ daysOfWeek: [0] });
+      config = config.toObject();
+    }
+    return res.json({
+      success: true,
+      config: {
+        daysOfWeek: Array.isArray(config.daysOfWeek) ? config.daysOfWeek : [],
+      },
+    });
+  } catch (error) {
+    console.error('❌ Get week off config error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+const updateWeekOffConfig = async (req, res) => {
+  try {
+    const { daysOfWeek } = req.body;
+
+    if (!Array.isArray(daysOfWeek)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_PAYLOAD',
+        message: 'daysOfWeek must be an array of numbers.',
+      });
+    }
+
+    const validDays = daysOfWeek
+      .map((d) => Number(d))
+      .filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+
+    const uniqueDays = Array.from(new Set(validDays)).sort((a, b) => a - b);
+
+    let config = await WeekOffConfig.findOne();
+    if (!config) {
+      config = await WeekOffConfig.create({ daysOfWeek: uniqueDays });
+    } else {
+      config.daysOfWeek = uniqueDays;
+      await config.save();
+    }
+
+    return res.json({
+      success: true,
+      config: {
+        daysOfWeek: config.daysOfWeek,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Update week off config error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
+
 module.exports = {
+  getAdmins,
+  createAdminAccount,
+  updateAdminAccount,
+  deleteAdminAccount,
   getAllEmployees,
   getEmployeeById,
+  updateEmployeeDetails,
   createEmployee,
   toggleEmployeeStatus,
+  deleteEmployee,
   getAllAttendance,
   getAttendanceStatistics,
   exportAttendanceReport,
   getOfficeLocation,
   updateOfficeLocation,
+  listOfficeLocations,
+  createOfficeLocationItem,
+  updateOfficeLocationById,
+  deleteOfficeLocationById,
   getLeaveRequests,
   updateLeaveRequest,
+  getDepartments,
+  createDepartment,
+  updateDepartmentDetails,
+  deleteDepartment,
+  getWeekOffConfig,
+  updateWeekOffConfig,
 };
