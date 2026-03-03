@@ -106,13 +106,21 @@ const loginUser = async (req, res) => {
     // ── 8. Generate token & respond ───────────────────────────────
     securityLogger.authSuccess(user._id, req.ip, req.get('User-Agent'));
 
-    const token = generateToken(user._id);
+    const sessionId = (crypto.randomUUID && crypto.randomUUID()) || crypto.randomBytes(16).toString('hex');
+    user.activeSessionId = sessionId;
+    const refreshToken = crypto.randomBytes(32).toString('hex');
+    user.refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    user.refreshTokenExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    await user.save();
+
+    const token = generateToken(user._id, sessionId);
 
     const response = {
       success: true,
       data: {
         ...sanitizeUser(user),
         token,
+        refreshToken,
       },
     };
 
@@ -142,6 +150,11 @@ const loginUser = async (req, res) => {
 const logoutUser = async (req, res) => {
   try {
 
+
+    req.user.activeSessionId = null;
+    req.user.refreshTokenHash = null;
+    req.user.refreshTokenExpires = null;
+    await req.user.save();
 
     securityLogger.authSuccess(req.user._id, req.ip, req.get('User-Agent'));
 
@@ -395,6 +408,55 @@ const resetPassword = async (req, res) => {
 };
 
 
+const refreshAccessToken = async (req, res) => {
+  try {
+    const { refreshToken } = req.body || {};
+    if (!refreshToken) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_REFRESH_TOKEN',
+        message: 'Refresh token is required.',
+      });
+    }
+
+    const hash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    const user = await User.findOne({
+      refreshTokenHash: hash,
+      refreshTokenExpires: { $gt: new Date() },
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_REFRESH',
+        message: 'Refresh token is invalid or expired.',
+      });
+    }
+
+    if (!user.activeSessionId) {
+      return res.status(401).json({
+        success: false,
+        code: 'SESSION_REVOKED',
+        message: 'Your session is no longer active. Please log in again.',
+      });
+    }
+
+    const token = generateToken(user._id, user.activeSessionId);
+
+    return res.json({
+      success: true,
+      data: { token },
+    });
+  } catch (error) {
+    securityLogger.systemError(error, req);
+    return res.status(500).json({
+      success: false,
+      code: 'REFRESH_ERROR',
+      message: 'Failed to refresh token.',
+    });
+  }
+};
+
 module.exports = {
   loginUser,
   logoutUser,
@@ -402,4 +464,5 @@ module.exports = {
   updateUserProfile,
   forgotPassword,
   resetPassword,
+  refreshAccessToken,
 };

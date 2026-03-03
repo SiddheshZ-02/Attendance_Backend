@@ -59,7 +59,24 @@ const protect = async (req, res, next) => {
     
   
 
-    // ── 5. Check if password was changed after JWT was issued ───
+    if (!user.activeSessionId) {
+      securityLogger.authFailure(user.email, req.ip, req.get('User-Agent'), 'SESSION_REVOKED');
+      return res.status(401).json({
+        success: false,
+        code: 'SESSION_REVOKED',
+        message: 'Your session is no longer active. Please log in again.',
+      });
+    }
+
+    if (!decoded.sid || decoded.sid !== String(user.activeSessionId)) {
+      securityLogger.authFailure(user.email, req.ip, req.get('User-Agent'), 'TOKEN_REVOKED');
+      return res.status(401).json({
+        success: false,
+        code: 'TOKEN_REVOKED',
+        message: 'This token has been invalidated by a newer login. Please log in again.',
+      });
+    }
+
     if (decoded.iat && user.changedPasswordAfter(decoded.iat)) {
       return res.status(401).json({
         success: false,

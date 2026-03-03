@@ -7,6 +7,7 @@ const {
   updateUserProfile,
   forgotPassword,
   resetPassword,
+  refreshAccessToken,
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 
@@ -14,6 +15,7 @@ const { protect } = require('../middleware/authMiddleware');
 // POST /api/auth/login           → login with email + password
 // POST /api/auth/logout          → logout [Protected]
 router.post('/login', loginUser);
+router.post('/refresh', refreshAccessToken);
 router.post('/logout', protect, logoutUser);
 
 // ─── Profile Routes ────────────────────────────────────────────────────────────

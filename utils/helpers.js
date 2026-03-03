@@ -16,9 +16,9 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 // Generate JWT token
-const generateToken = (id) => {
+const generateToken = (id, sessionId) => {
   const jwt = require('jsonwebtoken');
-  return jwt.sign({ id }, process.env.JWT_SECRET || 'your-secret-key-change-in-production', {
+  return jwt.sign({ id, sid: sessionId }, process.env.JWT_SECRET || 'your-secret-key-change-in-production', {
     expiresIn: '30d'
   });
 };
