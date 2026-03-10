@@ -2,10 +2,14 @@ const mongoose = require('mongoose');
 
 const departmentSchema = new mongoose.Schema(
   {
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      required: true,
+    },
     name: {
       type: String,
       required: true,
-      unique: true,
       trim: true,
       maxlength: 100,
     },
@@ -31,7 +35,7 @@ const departmentSchema = new mongoose.Schema(
   }
 );
 
-
+departmentSchema.index({ companyId: 1, name: 1 }, { unique: true });
 
 module.exports = mongoose.model('Department', departmentSchema);
 

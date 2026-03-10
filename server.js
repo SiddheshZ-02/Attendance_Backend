@@ -3,11 +3,11 @@ const cors = require('cors');
 const connectDB = require('./config/database');
 require('dotenv').config();
 
-// Import routes
 const authRoutes = require('./routes/authRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const leaveRoutes = require('./routes/leaveRoutes');
+const ownerRoutes = require('./routes/ownerRoutes');
 
 // Initialize express app
 const app = express();
@@ -25,11 +25,11 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' })); // Set body size limit
 app.use(express.urlencoded({ extended: true, limit: '10mb' })); // Set URL encoded limit
 
-// API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/leave', leaveRoutes);
+app.use('/api/owner', ownerRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -54,9 +54,8 @@ app.get('/api', (req, res) => {
   });
 });
 
-// 404 handler
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api/') && !req.path.match(/^\/api\/(auth|attendance|admin|leave|health)/)) {
+  if (req.path.startsWith('/api/') && !req.path.match(/^\/api\/(auth|attendance|admin|leave|owner|health)/)) {
     return res.status(404).json({ message: 'API endpoint not found' });
   }
   next();

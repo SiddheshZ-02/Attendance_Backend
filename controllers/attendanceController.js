@@ -87,7 +87,10 @@ const checkIn = async (req, res) => {
 
     // ── 3. OFFICE MODE — validate distance from office ─────────────
     if (workMode === 'Office') {
-      const officeLocation = await OfficeLocation.findOne({ isActive: true });
+      const officeLocation = await OfficeLocation.findOne({
+        companyId: req.user.companyId || null,
+        isActive: true,
+      });
 
       if (!officeLocation) {
         return res.status(404).json({
@@ -119,15 +122,15 @@ const checkIn = async (req, res) => {
     // ── 5. Create attendance record ───────────────────────────────
     const attendance = await Attendance.create({
       userId: req.user._id,
+      companyId: req.user.companyId || null,
       workMode,
       checkInTime: new Date(),
       checkInLocation: {
         type: 'Point',
-        coordinates: [longitude, latitude], // GeoJSON: [lng, lat]
+        coordinates: [longitude, latitude],
       },
       date: today,
       status: 'checked-in',
-      // WFH checkout radius — stored immutably at check-in time
       wfhCheckoutRadius: 100,
     });
 
@@ -196,7 +199,10 @@ const checkOut = async (req, res) => {
 
     // ── 3. OFFICE MODE — validate distance from office ─────────────
     if (attendance.workMode === 'Office') {
-      const officeLocation = await OfficeLocation.findOne({ isActive: true });
+      const officeLocation = await OfficeLocation.findOne({
+        companyId: req.user.companyId || null,
+        isActive: true,
+      });
 
       if (!officeLocation) {
         return res.status(404).json({
@@ -408,7 +414,9 @@ const getAttendanceCalendar = async (req, res) => {
       rangeEnd = formatDate(last);
     }
 
-    const weekOffConfig = await WeekOffConfig.findOne().lean();
+    const weekOffConfig = await WeekOffConfig.findOne({
+      companyId: req.user.companyId || null,
+    }).lean();
     const weekOffDays = Array.isArray(weekOffConfig?.daysOfWeek)
       ? weekOffConfig.daysOfWeek
       : [0];

@@ -2,11 +2,15 @@ const mongoose = require('mongoose');
 
 const attendanceSchema = new mongoose.Schema(
   {
-    // ─── User Reference ───────────────────────────────────────────
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
+    },
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      default: null,
     },
 
     // ─── Work Mode ────────────────────────────────────────────────
@@ -96,14 +100,10 @@ const attendanceSchema = new mongoose.Schema(
   }
 );
 
-// ─── Indexes ──────────────────────────────────────────────────────
-// 2dsphere index enables geo-queries on checkInLocation
 attendanceSchema.index({ checkInLocation: '2dsphere' });
 
-// Compound index — most common query pattern
 attendanceSchema.index({ userId: 1, date: 1 });
-
-// Useful for admin dashboards filtering by date + mode
 attendanceSchema.index({ date: 1, workMode: 1 });
+attendanceSchema.index({ companyId: 1, date: 1 });
 
 module.exports = mongoose.model('Attendance', attendanceSchema);

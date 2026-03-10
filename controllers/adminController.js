@@ -42,6 +42,10 @@ const getAllEmployees = async (req, res) => {
 
     const query = { role: 'employee' };
 
+    if (req.user.companyId) {
+      query.companyId = req.user.companyId;
+    }
+
     // ── Filters ───────────────────────────────────────────────────
     if (search) {
       query.$or = [
@@ -91,9 +95,15 @@ const getAllEmployees = async (req, res) => {
 
 const getAdmins = async (req, res) => {
   try {
-    const admins = await User.find({
+    const adminQuery = {
       role: { $in: ['admin', 'manager'] },
-    })
+    };
+
+    if (req.user.companyId) {
+      adminQuery.companyId = req.user.companyId;
+    }
+
+    const admins = await User.find(adminQuery)
       .select('-password -passwordResetToken -passwordResetExpires')
       .sort({ createdAt: -1 })
       .lean();
@@ -319,10 +329,16 @@ const getEmployeeById = async (req, res) => {
     };
 
     // ── Pending leaves ────────────────────────────────────────────
-    const pendingLeaves = await LeaveRequest.countDocuments({
+    const leaveQuery = {
       userId: req.params.id,
       status: 'pending',
-    });
+    };
+
+    if (req.user.companyId) {
+      leaveQuery.companyId = req.user.companyId;
+    }
+
+    const pendingLeaves = await LeaveRequest.countDocuments(leaveQuery);
 
     return res.json({
       success: true,
@@ -557,6 +573,7 @@ const createEmployee = async (req, res) => {
       position: position?.trim() || '',
       role: 'employee',
       isActive: true,
+      companyId: req.user.companyId || null,
     });
 
     // Return employee without sensitive fields
@@ -659,6 +676,14 @@ const getAllAttendance = async (req, res) => {
 
     const query = {};
 
+    if (req.user.companyId) {
+      query.companyId = req.user.companyId;
+    }
+
+    if (req.user.companyId) {
+      query.companyId = req.user.companyId;
+    }
+
     if (userId) query.userId = userId;
     if (workMode && ['Office', 'WFH'].includes(workMode)) {
       query.workMode = workMode;
@@ -713,11 +738,23 @@ const getAttendanceStatistics = async (req, res) => {
     const today = formatDate(new Date());
 
     // ── Today's snapshot ──────────────────────────────────────────
-    const todayRecords = await Attendance.find({ date: today }).lean();
-    const totalEmployees = await User.countDocuments({
+    const todayQuery = { date: today };
+
+    if (req.user.companyId) {
+      todayQuery.companyId = req.user.companyId;
+    }
+
+    const todayRecords = await Attendance.find(todayQuery).lean();
+    const employeeFilter = {
       role: 'employee',
       isActive: true,
-    });
+    };
+
+    if (req.user.companyId) {
+      employeeFilter.companyId = req.user.companyId;
+    }
+
+    const totalEmployees = await User.countDocuments(employeeFilter);
 
     const checkedInToday = todayRecords.filter(
       (a) => a.status === 'checked-in'
@@ -738,9 +775,15 @@ const getAttendanceStatistics = async (req, res) => {
       new Date(nowDate.getFullYear(), nowDate.getMonth(), 1)
     );
 
-    const monthRecords = await Attendance.find({
+    const monthQuery = {
       date: { $gte: firstDayOfMonth },
-    }).lean();
+    };
+
+    if (req.user.companyId) {
+      monthQuery.companyId = req.user.companyId;
+    }
+
+    const monthRecords = await Attendance.find(monthQuery).lean();
 
     const totalWorkingHours = monthRecords.reduce(
       (sum, r) => sum + (r.workingHours || 0),
@@ -757,10 +800,17 @@ const getAttendanceStatistics = async (req, res) => {
     ).length;
 
     // ── Leave summary ─────────────────────────────────────────────
+    const leaveFilterBase = {};
+    if (req.user.companyId) {
+      leaveFilterBase.companyId = req.user.companyId;
+    }
+
     const pendingLeaves = await LeaveRequest.countDocuments({
+      ...leaveFilterBase,
       status: 'pending',
     });
     const approvedLeaves = await LeaveRequest.countDocuments({
+      ...leaveFilterBase,
       status: 'approved',
     });
 
@@ -881,11 +931,17 @@ const exportAttendanceReport = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════
 const getOfficeLocation = async (req, res) => {
   try {
-    let officeLocation = await OfficeLocation.findOne({ isActive: true });
+    const filter = {
+      companyId: req.user.companyId || null,
+      isActive: true,
+    };
+
+    let officeLocation = await OfficeLocation.findOne(filter);
 
     if (!officeLocation) {
       // Create a default — admin should update this immediately
       officeLocation = await OfficeLocation.create({
+        companyId: req.user.companyId || null,
         name: 'Main Office',
         location: {
           type: 'Point',
@@ -938,7 +994,12 @@ const updateOfficeLocation = async (req, res) => {
       });
     }
 
-    let officeLocation = await OfficeLocation.findOne({ isActive: true });
+    const filter = {
+      companyId: req.user.companyId || null,
+      isActive: true,
+    };
+
+    let officeLocation = await OfficeLocation.findOne(filter);
 
     if (officeLocation) {
       officeLocation.name = name || officeLocation.name;
@@ -951,6 +1012,7 @@ const updateOfficeLocation = async (req, res) => {
       await officeLocation.save();
     } else {
       officeLocation = await OfficeLocation.create({
+        companyId: req.user.companyId || null,
         name: name || 'Main Office',
         location: {
           type: 'Point',
@@ -984,7 +1046,11 @@ const updateOfficeLocation = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════
 const listOfficeLocations = async (req, res) => {
   try {
-    const items = await OfficeLocation.find({}).sort({ createdAt: -1 }).lean();
+    const items = await OfficeLocation.find({
+      companyId: req.user.companyId || null,
+    })
+      .sort({ createdAt: -1 })
+      .lean();
     return res.json({
       success: true,
       officeLocations: items,
@@ -1027,6 +1093,7 @@ const createOfficeLocationItem = async (req, res) => {
     // When isActive is true, mark only the created item as active without changing others.
 
     const created = await OfficeLocation.create({
+      companyId: req.user.companyId || null,
       name: name || 'Office',
       location: {
         type: 'Point',
@@ -1059,7 +1126,10 @@ const createOfficeLocationItem = async (req, res) => {
 const updateOfficeLocationById = async (req, res) => {
   try {
     const { name, latitude, longitude, radius, address, isActive } = req.body;
-    const item = await OfficeLocation.findById(req.params.id);
+    const item = await OfficeLocation.findOne({
+      _id: req.params.id,
+      companyId: req.user.companyId || null,
+    });
     if (!item) {
       return res.status(404).json({
         success: false,
@@ -1099,7 +1169,10 @@ const updateOfficeLocationById = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════
 const deleteOfficeLocationById = async (req, res) => {
   try {
-    const item = await OfficeLocation.findById(req.params.id);
+    const item = await OfficeLocation.findOne({
+      _id: req.params.id,
+      companyId: req.user.companyId || null,
+    });
     if (!item) {
       return res.status(404).json({
         success: false,
@@ -1134,6 +1207,9 @@ const getLeaveRequests = async (req, res) => {
     const { status, userId, page = 1, limit = 20 } = req.query;
 
     const query = {};
+    if (req.user.companyId) {
+      query.companyId = req.user.companyId;
+    }
     if (status) query.status = status;
     if (userId) query.userId = userId;
 
@@ -1310,7 +1386,10 @@ const createDepartment = async (req, res) => {
 
     const trimmedName = String(name).trim();
 
-    const existing = await Department.findOne({ name: trimmedName });
+    const existing = await Department.findOne({
+      name: trimmedName,
+      companyId: req.user.companyId || null,
+    });
     if (existing) {
       return res.status(400).json({
         success: false,
@@ -1331,6 +1410,7 @@ const createDepartment = async (req, res) => {
         : '';
 
     const department = await Department.create({
+      companyId: req.user.companyId || null,
       name: trimmedName,
       description: String(description).trim(),
       manager: managerValue,
@@ -1364,7 +1444,10 @@ const updateDepartmentDetails = async (req, res) => {
   try {
     const { name, description, manager, status } = req.body;
 
-    const department = await Department.findById(req.params.id);
+    const department = await Department.findOne({
+      _id: req.params.id,
+      companyId: req.user.companyId || null,
+    });
 
     if (!department) {
       return res.status(404).json({
@@ -1375,7 +1458,11 @@ const updateDepartmentDetails = async (req, res) => {
     }
 
     if (name && name.trim() !== department.name) {
-      const existing = await Department.findOne({ name: name.trim() });
+      const existing = await Department.findOne({
+        name: name.trim(),
+        companyId: req.user.companyId || null,
+        _id: { $ne: department._id },
+      });
       if (existing) {
         return res.status(400).json({
           success: false,
@@ -1432,7 +1519,10 @@ const updateDepartmentDetails = async (req, res) => {
 
 const deleteDepartment = async (req, res) => {
   try {
-    const department = await Department.findById(req.params.id);
+    const department = await Department.findOne({
+      _id: req.params.id,
+      companyId: req.user.companyId || null,
+    });
 
     if (!department) {
       return res.status(404).json({
@@ -1474,9 +1564,14 @@ const deleteDepartment = async (req, res) => {
 
 const getWeekOffConfig = async (req, res) => {
   try {
-    let config = await WeekOffConfig.findOne().lean();
+    const filter = { companyId: req.user.companyId || null };
+
+    let config = await WeekOffConfig.findOne(filter).lean();
     if (!config) {
-      config = await WeekOffConfig.create({ daysOfWeek: [0] });
+      config = await WeekOffConfig.create({
+        companyId: req.user.companyId || null,
+        daysOfWeek: [0],
+      });
       config = config.toObject();
     }
     return res.json({
@@ -1513,9 +1608,13 @@ const updateWeekOffConfig = async (req, res) => {
 
     const uniqueDays = Array.from(new Set(validDays)).sort((a, b) => a - b);
 
-    let config = await WeekOffConfig.findOne();
+    const filter = { companyId: req.user.companyId || null };
+    let config = await WeekOffConfig.findOne(filter);
     if (!config) {
-      config = await WeekOffConfig.create({ daysOfWeek: uniqueDays });
+      config = await WeekOffConfig.create({
+        companyId: req.user.companyId || null,
+        daysOfWeek: uniqueDays,
+      });
     } else {
       config.daysOfWeek = uniqueDays;
       await config.save();

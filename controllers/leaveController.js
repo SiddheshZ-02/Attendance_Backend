@@ -63,6 +63,7 @@ const submitLeaveRequest = async (req, res) => {
     // Check for any pending/approved leave that overlaps with requested range
     const overlapping = await LeaveRequest.findOne({
       userId: req.user._id,
+      companyId: req.user.companyId || null,
       status: { $in: ['pending', 'approved'] },
       $or: [
         // existing leave starts inside requested range
@@ -96,6 +97,7 @@ const submitLeaveRequest = async (req, res) => {
     // ── 4. Create leave request ───────────────────────────────────
     const leaveRequest = await LeaveRequest.create({
       userId: req.user._id,
+      companyId: req.user.companyId || null,
       startDate: start,
       endDate: end,
       reason: reason.trim(),
@@ -131,7 +133,10 @@ const getMyLeaveRequests = async (req, res) => {
   try {
     const { status } = req.query;
 
-    const query = { userId: req.user._id };
+    const query = {
+      userId: req.user._id,
+      companyId: req.user.companyId || null,
+    };
     if (status) {
       if (!['pending', 'approved', 'rejected', 'cancelled'].includes(status)) {
         return res.status(400).json({
@@ -149,7 +154,10 @@ const getMyLeaveRequests = async (req, res) => {
       .lean();
 
     // ── Summary stats ─────────────────────────────────────────────
-    const all = await LeaveRequest.find({ userId: req.user._id }).lean();
+    const all = await LeaveRequest.find({
+      userId: req.user._id,
+      companyId: req.user.companyId || null,
+    }).lean();
     const summary = {
       total: all.length,
       pending: all.filter((r) => r.status === 'pending').length,

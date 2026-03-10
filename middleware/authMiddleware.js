@@ -136,10 +136,6 @@ const admin = (req, res, next) => {
 };
 
 
-// ═════════════════════════════════════════════════════════════════════════════
-// manager — checks that user has role = 'admin' OR 'manager'
-// Must be used AFTER protect middleware
-// ═════════════════════════════════════════════════════════════════════════════
 const manager = (req, res, next) => {
   if (req.user && ['admin', 'manager'].includes(req.user.role)) {
     return next();
@@ -153,4 +149,17 @@ const manager = (req, res, next) => {
 };
 
 
-module.exports = { protect, admin, manager };
+const owner = (req, res, next) => {
+  if (req.user && req.user.role === 'owner') {
+    return next();
+  }
+
+  return res.status(403).json({
+    success: false,
+    code: 'INSUFFICIENT_PERMISSIONS',
+    message: 'Access denied. Owner privileges required.',
+  });
+};
+
+
+module.exports = { protect, admin, manager, owner };

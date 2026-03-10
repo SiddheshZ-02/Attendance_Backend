@@ -34,8 +34,13 @@ const userSchema = new mongoose.Schema(
     // ── Role & Employment ──────────────────────────────────────────
     role: {
       type: String,
-      enum: ['employee', 'admin', 'manager'],
+      enum: ['employee', 'admin', 'manager', 'owner'],
       default: 'employee',
+    },
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      default: null,
     },
     employeeId: {
       type: String,
@@ -166,7 +171,7 @@ userSchema.methods.createPasswordResetToken = function () {
   return resetToken; // return raw — sent to user via email
 };
 
-
 userSchema.index({ role: 1, isActive: 1 }); 
+userSchema.index({ companyId: 1, role: 1 });
 
 module.exports = mongoose.model('User', userSchema);

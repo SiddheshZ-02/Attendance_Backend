@@ -8,6 +8,11 @@ const leaveRequestSchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      default: null,
+    },
 
     // ─── Leave Dates ──────────────────────────────────────────────
     startDate: {
@@ -69,9 +74,9 @@ const leaveRequestSchema = new mongoose.Schema(
 // ─── Auto-calculate totalDays before save ─────────────────────────
 // Disabled hook; totalDays is now calculated in the controller.
 
-// ─── Indexes ──────────────────────────────────────────────────────
 leaveRequestSchema.index({ userId: 1, status: 1 });
-leaveRequestSchema.index({ userId: 1, startDate: 1, endDate: 1 }); // for overlap queries
-leaveRequestSchema.index({ status: 1, createdAt: -1 });            // for admin dashboard
+leaveRequestSchema.index({ userId: 1, startDate: 1, endDate: 1 });
+leaveRequestSchema.index({ status: 1, createdAt: -1 });
+leaveRequestSchema.index({ companyId: 1, status: 1 });
 
 module.exports = mongoose.model('LeaveRequest', leaveRequestSchema);
