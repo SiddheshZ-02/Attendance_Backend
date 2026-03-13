@@ -85,33 +85,53 @@ const checkIn = async (req, res) => {
       });
     }
 
-    // ── 3. OFFICE MODE — validate distance from office ─────────────
+    // ── 3. OFFICE MODE — validate distance from ANY active office ─────────────
+    let selectedOffice = null;
     if (workMode === 'Office') {
-      const officeLocation = await OfficeLocation.findOne({
+      const officeLocations = await OfficeLocation.find({
         companyId: req.user.companyId || null,
         isActive: true,
       });
 
-      if (!officeLocation) {
+      if (!officeLocations || officeLocations.length === 0) {
         return res.status(404).json({
           success: false,
           code: 'OFFICE_NOT_CONFIGURED',
-          message: 'Office location is not configured. Please contact admin.',
+          message: 'No office locations are configured. Please contact admin.',
         });
       }
 
-      const officeLat = officeLocation.location.coordinates[1];
-      const officeLng = officeLocation.location.coordinates[0];
+      // Check each active location
+      for (const office of officeLocations) {
+        const officeLat = office.location.coordinates[1];
+        const officeLng = office.location.coordinates[0];
+        const distance = calculateDistance(latitude, longitude, officeLat, officeLng);
 
-      const distance = calculateDistance(latitude, longitude, officeLat, officeLng);
+        if (distance <= office.radius) {
+          selectedOffice = office;
+          break;
+        }
+      }
 
-      if (distance > officeLocation.radius) {
+      if (!selectedOffice) {
+        // Optionally find the nearest office to give a better error message
+        let nearestDistance = Infinity;
+        let nearestOfficeName = '';
+        for (const office of officeLocations) {
+          const officeLat = office.location.coordinates[1];
+          const officeLng = office.location.coordinates[0];
+          const distance = calculateDistance(latitude, longitude, officeLat, officeLng);
+          if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearestOfficeName = office.name;
+          }
+        }
+
         return res.status(400).json({
           success: false,
           code: 'OUT_OF_OFFICE_RADIUS',
-          message: `You are ${Math.round(distance)}m away from the office. You must be within ${officeLocation.radius}m to check in.`,
-          distance: Math.round(distance),
-          allowedRadius: officeLocation.radius,
+          message: `You are not within any registered office location's radius. The nearest office is '${nearestOfficeName}' (${Math.round(nearestDistance)}m away).`,
+          distance: Math.round(nearestDistance),
         });
       }
     }
@@ -123,6 +143,7 @@ const checkIn = async (req, res) => {
     const attendance = await Attendance.create({
       userId: req.user._id,
       companyId: req.user.companyId || null,
+      officeLocationId: selectedOffice ? selectedOffice._id : null,
       workMode,
       checkInTime: new Date(),
       checkInLocation: {
@@ -197,14 +218,14 @@ const checkOut = async (req, res) => {
       });
     }
 
-    // ── 3. OFFICE MODE — validate distance from office ─────────────
+    // ── 3. OFFICE MODE — validate distance from ANY active office ─────────────
     if (attendance.workMode === 'Office') {
-      const officeLocation = await OfficeLocation.findOne({
+      const officeLocations = await OfficeLocation.find({
         companyId: req.user.companyId || null,
         isActive: true,
       });
 
-      if (!officeLocation) {
+      if (!officeLocations || officeLocations.length === 0) {
         return res.status(404).json({
           success: false,
           code: 'OFFICE_NOT_CONFIGURED',
@@ -212,18 +233,32 @@ const checkOut = async (req, res) => {
         });
       }
 
-      const officeLat = officeLocation.location.coordinates[1];
-      const officeLng = officeLocation.location.coordinates[0];
+      let withinRadius = false;
+      let nearestDistance = Infinity;
+      let nearestOfficeName = '';
 
-      const distance = calculateDistance(latitude, longitude, officeLat, officeLng);
+      for (const office of officeLocations) {
+        const officeLat = office.location.coordinates[1];
+        const officeLng = office.location.coordinates[0];
+        const distance = calculateDistance(latitude, longitude, officeLat, officeLng);
 
-      if (distance > officeLocation.radius) {
+        if (distance <= office.radius) {
+          withinRadius = true;
+          break;
+        }
+
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestOfficeName = office.name;
+        }
+      }
+
+      if (!withinRadius) {
         return res.status(400).json({
           success: false,
           code: 'OUT_OF_OFFICE_RADIUS',
-          message: `You are ${Math.round(distance)}m away from the office. You must be within ${officeLocation.radius}m to check out.`,
-          distance: Math.round(distance),
-          allowedRadius: officeLocation.radius,
+          message: `You are not within any registered office location's radius. The nearest office is '${nearestOfficeName}' (${Math.round(nearestDistance)}m away).`,
+          distance: Math.round(nearestDistance),
         });
       }
     }

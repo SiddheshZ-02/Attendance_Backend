@@ -12,6 +12,11 @@ const attendanceSchema = new mongoose.Schema(
       ref: 'Company',
       default: null,
     },
+    officeLocationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'OfficeLocation',
+      default: null,
+    },
 
     // ─── Work Mode ────────────────────────────────────────────────
     workMode: {
