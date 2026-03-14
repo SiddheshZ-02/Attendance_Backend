@@ -49,7 +49,7 @@ const User = require('../models/User');
 
 const createHoliday = async (req, res) => {
   try {
-    const { name, date, description } = req.body;
+    const { name, date } = req.body;
     let companyId = req.user.companyId || null;
 
     // ── DEV AUTO-FIX: If user has no company, assign the first available one ──
@@ -98,7 +98,6 @@ const createHoliday = async (req, res) => {
       companyId,
       name,
       date,
-      description,
       createdBy: req.user._id,
     });
 
@@ -123,7 +122,7 @@ const createHoliday = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════
 const updateHoliday = async (req, res) => {
   try {
-    const { name, date, description } = req.body;
+    const { name, date } = req.body;
     const holidayId = req.params.id;
     const companyId = req.user.companyId || null;
 
@@ -166,7 +165,6 @@ const updateHoliday = async (req, res) => {
 
     holiday.name = name || holiday.name;
     holiday.date = date || holiday.date;
-    holiday.description = description !== undefined ? description : holiday.description;
 
     await holiday.save();
 

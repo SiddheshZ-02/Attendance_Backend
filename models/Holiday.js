@@ -17,10 +17,6 @@ const holidaySchema = new mongoose.Schema(
       type: String, // YYYY-MM-DD
       required: true,
     },
-    description: {
-      type: String,
-      trim: true,
-    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
