@@ -1,7 +1,9 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const OfficeLocation = require('../models/OfficeLocation');
 const LeaveRequest = require('../models/LeaveRequest');
+const EmployeeLeaveBalance = require('../models/EmployeeLeaveBalance');
 const Department = require('../models/Department');
 const WeekOffConfig = require('../models/WeekOffConfig');
 const { formatDate, generateToken, logActivity } = require('../utils/helpers');
@@ -1285,6 +1287,72 @@ const updateLeaveRequest = async (req, res) => {
     leaveRequest.approvedBy = req.user._id;
     leaveRequest.approvalDate = new Date();
     leaveRequest.adminComment = adminComment?.trim() || '';
+
+    // ── If Approved, deduct from balance (only if payType is 'paid') ──
+    const isPaid = !leaveRequest.payType || String(leaveRequest.payType).toLowerCase() === 'paid';
+    
+    if (status === 'approved' && isPaid) {
+      // Use startDate from the document directly if it's a Date object
+      const startDate = new Date(leaveRequest.startDate);
+      const year = startDate.getFullYear().toString();
+      
+      // Calculate totalDays robustly
+      const endDate = new Date(leaveRequest.endDate);
+      const diffMs = Math.abs(endDate.getTime() - startDate.getTime());
+      const totalDays = Math.max(1, Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1);
+      
+      // Update the request document with the latest calculated totalDays
+      leaveRequest.totalDays = totalDays;
+
+      // EXPLICIT CASTING to ensure the query matches ObjectIds in the database
+      const userObjId = new mongoose.Types.ObjectId(String(leaveRequest.userId));
+      const typeObjId = new mongoose.Types.ObjectId(String(leaveRequest.leaveTypeId));
+
+      console.log(`[LEAVE_DEDUCTION] DEBUG: Attempting deduction for ReqId=${leaveRequest._id}`);
+      console.log(`[LEAVE_DEDUCTION] QUERY PARAMS: userId=${userObjId}, leaveTypeId=${typeObjId}, year=${year}, status=active`);
+      
+      // Use findOneAndUpdate for atomicity and robustness
+      const updatedBalance = await EmployeeLeaveBalance.findOneAndUpdate(
+        {
+          userId: userObjId,
+          leaveTypeId: typeObjId,
+          year: year,
+          status: 'active',
+        },
+        {
+          $inc: { 
+            usedDays: totalDays, 
+            remainingDays: -totalDays 
+          }
+        },
+        { new: true, runValidators: false }
+      );
+
+      if (updatedBalance) {
+        console.log(`[LEAVE_DEDUCTION] SUCCESS: Found and updated balance. ID=${updatedBalance._id}, New Rem=${updatedBalance.remainingDays}`);
+        
+        // Safety check for negative balance
+        if (updatedBalance.remainingDays < 0) {
+          console.warn(`[LEAVE_DEDUCTION] WARNING: Balance went negative (${updatedBalance.remainingDays}). Capping at 0.`);
+          updatedBalance.remainingDays = 0;
+          await updatedBalance.save();
+        }
+      } else {
+        console.error(`[LEAVE_DEDUCTION] ERROR: No matching balance record found. Check if leaves were granted for year ${year}.`);
+        
+        // Fallback search to see if the record exists at all (ignoring status)
+        const checkBalance = await EmployeeLeaveBalance.findOne({
+          userId: userObjId,
+          leaveTypeId: typeObjId,
+          year: year
+        });
+        if (checkBalance) {
+          console.log(`[LEAVE_DEDUCTION] DEBUG: Found balance but it might be inactive. Current status: ${checkBalance.status}`);
+        } else {
+          console.log(`[LEAVE_DEDUCTION] DEBUG: Absolutely no balance record found for this user/type/year.`);
+        }
+      }
+    }
 
     await leaveRequest.save();
 

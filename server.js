@@ -24,23 +24,15 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(express.json({ limit: '10mb' })); // Set body size limit
-app.use(express.urlencoded({ extended: true, limit: '10mb' })); // Set URL encoded limit
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// ─── TEMP DEBUG LOGGING ───
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  if (req.method === 'POST') {
-    console.log('Body:', JSON.stringify(req.body, null, 2));
-  }
-  next();
-});
-
+// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/leave', leaveRoutes); // Changed back to /api/leave
 app.use('/api/holidays', holidayRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/leave', leaveRoutes);
 app.use('/api/owner', ownerRoutes);
 app.use('/api/activity', activityRoutes);
 
@@ -57,15 +49,16 @@ app.get('/api/health', (req, res) => {
 app.get('/api', (req, res) => {
   res.json({ 
     message: 'Employee Attendance System API',
-    version: '1.0.0',
-    endpoints: {
-      auth: '/api/auth',
-      attendance: '/api/attendance',
-      admin: '/api/admin',
-      leave: '/api/leave',
-      activity: '/api/activity',
-      holidays: '/api/holidays'
-    }
+    version: '1.0.0'
+  });
+});
+
+// 404 Handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Route ${req.originalUrl} not found on this server`,
+    code: 'NOT_FOUND'
   });
 });
 
@@ -83,5 +76,4 @@ const PORT = process.env.PORT || 8001;
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
-  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });

@@ -39,8 +39,18 @@ const leaveRequestSchema = new mongoose.Schema(
 
     leaveType: {
       type: String,
-      enum: ['sick', 'casual', 'vacation', 'other'],
-      default: 'casual',
+      required: true,
+    },
+    leaveTypeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'LeaveType',
+      required: true,
+    },
+    payType: {
+      type: String,
+      enum: ['paid', 'unpaid'],
+      required: true,
+      default: 'paid',
     },
 
     // ─── Status ───────────────────────────────────────────────────
