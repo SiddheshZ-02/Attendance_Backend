@@ -29,7 +29,24 @@ const {
   getWeekOffConfig,
   updateWeekOffConfig,
 } = require('../controllers/adminController');
+const {
+  getHolidays,
+  createHoliday,
+  updateHoliday,
+  deleteHoliday,
+} = require('../controllers/holidayController');
 const { protect, admin } = require('../middleware/authMiddleware');
+
+// ─── Holiday Routes (Moved to top) ────────────────────────────────
+router
+  .route('/holidays')
+  .get(protect, admin, getHolidays)
+  .post(protect, admin, createHoliday);
+
+router
+  .route('/holidays/:id')
+  .put(protect, admin, updateHoliday)
+  .delete(protect, admin, deleteHoliday);
 
 // ─── Admin User Routes ────────────────────────────────────────────
 // GET  /api/admin/admins            → list all admin/manager accounts

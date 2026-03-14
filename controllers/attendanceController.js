@@ -1,7 +1,8 @@
 const Attendance = require('../models/Attendance');
 const OfficeLocation = require('../models/OfficeLocation');
 const WeekOffConfig = require('../models/WeekOffConfig');
-const { calculateDistance, formatDate, calculateWorkingHours } = require('../utils/helpers');
+const Holiday = require('../models/Holiday');
+const { calculateDistance, formatDate, calculateWorkingHours, logActivity } = require('../utils/helpers');
 
 // ─────────────────────────────────────────────────────────────────
 // HELPER — format a Date object → "HH:MM" (24-hr) string
@@ -155,6 +156,19 @@ const checkIn = async (req, res) => {
       wfhCheckoutRadius: 100,
     });
 
+    // ── Log Activity ─────────────────────────────────────────────
+    const checkInTimeStr = new Date(attendance.checkInTime).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    await logActivity(
+      req.user._id,
+      'check-in',
+      `Clock In – ${checkInTimeStr}`,
+      req.user.companyId
+    );
+
     return res.status(201).json({
       success: true,
       message: `Checked in successfully (${workMode}).`,
@@ -297,6 +311,19 @@ const checkOut = async (req, res) => {
     attendance.status = 'checked-out';
 
     await attendance.save();
+
+    // ── Log Activity ─────────────────────────────────────────────
+    const checkOutTimeStr = new Date(attendance.checkOutTime).toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    await logActivity(
+      req.user._id,
+      'check-out',
+      `Clock Out – ${checkOutTimeStr}`,
+      req.user.companyId
+    );
 
     return res.json({
       success: true,
@@ -456,6 +483,16 @@ const getAttendanceCalendar = async (req, res) => {
       ? weekOffConfig.daysOfWeek
       : [0];
 
+    const holidays = await Holiday.find({
+      companyId: req.user.companyId || null,
+      date: { $gte: rangeStart, $lte: rangeEnd },
+    }).lean();
+
+    const holidayMap = new Map();
+    holidays.forEach((h) => {
+      holidayMap.set(h.date, h.name);
+    });
+
     const attendanceRecords = await Attendance.find({
       userId: req.user._id,
       date: { $gte: rangeStart, $lte: rangeEnd },
@@ -472,6 +509,7 @@ const getAttendanceCalendar = async (req, res) => {
     let presentDays = 0;
     let leaveDays = 0;
     let weekOffDaysCount = 0;
+    let holidayCount = 0;
     let totalHoursDecimal = 0;
 
     const cursor = new Date(rangeStart);
@@ -481,6 +519,7 @@ const getAttendanceCalendar = async (req, res) => {
       const dateStr = formatDate(cursor);
       const weekday = cursor.getDay();
       const record = recordsByDate.get(dateStr);
+      const holidayName = holidayMap.get(dateStr);
 
       let status;
       let workMode = null;
@@ -489,18 +528,22 @@ const getAttendanceCalendar = async (req, res) => {
       let workingHours = 0;
 
       if (record) {
-        status = 'Present';
+        status = "Present";
         workMode = record.workMode || null;
         checkInTime = record.checkInTime || null;
         checkOutTime = record.checkOutTime || null;
         workingHours = record.workingHours || 0;
         presentDays += 1;
         totalHoursDecimal += workingHours;
+      } else if (holidayName) {
+        status = "Holiday";
+        workMode = holidayName;
+        holidayCount += 1;
       } else if (weekOffDays.includes(weekday)) {
-        status = 'Week Off';
+        status = "Week Off";
         weekOffDaysCount += 1;
       } else {
-        status = 'Leave';
+        status = "Leave";
         leaveDays += 1;
       }
 
@@ -520,6 +563,7 @@ const getAttendanceCalendar = async (req, res) => {
       presentDays,
       leaveDays,
       weekOffDays: weekOffDaysCount,
+      holidayDays: holidayCount,
       totalHours: formatHours(totalHoursDecimal),
     };
 

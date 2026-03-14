@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const User = require('../models/User');
-const { generateToken } = require('../utils/helpers');
+const { generateToken, logActivity } = require('../utils/helpers');
 const { securityLogger } = require('../utils/logger');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -265,6 +265,19 @@ const updateUserProfile = async (req, res) => {
     }
 
     const updatedUser = await user.save();
+
+    // ── Log Activity ─────────────────────────────────────────────
+    const updateTimeStr = new Date().toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    await logActivity(
+      user._id,
+      'profile-update',
+      `Profile Updated – ${updateTimeStr}`,
+      user.companyId
+    );
 
     return res.json({
       success: true,

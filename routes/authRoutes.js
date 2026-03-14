@@ -10,6 +10,17 @@ const {
   refreshAccessToken,
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
+const User = require('../models/User');
+const Company = require('../models/Company');
+
+// ─── TEMP FIX ROUTE ───
+router.get('/fix-company', protect, async (req, res) => {
+  if (req.user.companyId) return res.json({ message: 'Already has company' });
+  const company = await Company.findOne();
+  if (!company) return res.status(404).json({ message: 'No company found' });
+  await User.findByIdAndUpdate(req.user._id, { companyId: company._id });
+  res.json({ message: 'Company assigned', companyId: company._id });
+});
 
 // ─── Auth Routes ───────────────────────────────────────────────────────────────
 // POST /api/auth/login           → login with email + password

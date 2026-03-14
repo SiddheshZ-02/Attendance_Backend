@@ -1,13 +1,15 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/database');
-require('dotenv').config();
 
 const authRoutes = require('./routes/authRoutes');
 const attendanceRoutes = require('./routes/attendanceRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const leaveRoutes = require('./routes/leaveRoutes');
 const ownerRoutes = require('./routes/ownerRoutes');
+const activityRoutes = require('./routes/activityRoutes');
+const holidayRoutes = require('./routes/holidayRoutes');
 
 // Initialize express app
 const app = express();
@@ -25,11 +27,22 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' })); // Set body size limit
 app.use(express.urlencoded({ extended: true, limit: '10mb' })); // Set URL encoded limit
 
+// ─── TEMP DEBUG LOGGING ───
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  if (req.method === 'POST') {
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+  }
+  next();
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/holidays', holidayRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/leave', leaveRoutes);
 app.use('/api/owner', ownerRoutes);
+app.use('/api/activity', activityRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -49,16 +62,11 @@ app.get('/api', (req, res) => {
       auth: '/api/auth',
       attendance: '/api/attendance',
       admin: '/api/admin',
-      leave: '/api/leave'
+      leave: '/api/leave',
+      activity: '/api/activity',
+      holidays: '/api/holidays'
     }
   });
-});
-
-app.use((req, res, next) => {
-  if (req.path.startsWith('/api/') && !req.path.match(/^\/api\/(auth|attendance|admin|leave|owner|health)/)) {
-    return res.status(404).json({ message: 'API endpoint not found' });
-  }
-  next();
 });
 
 // Error handler

@@ -4,8 +4,7 @@ const OfficeLocation = require('../models/OfficeLocation');
 const LeaveRequest = require('../models/LeaveRequest');
 const Department = require('../models/Department');
 const WeekOffConfig = require('../models/WeekOffConfig');
-const { formatDate } = require('../utils/helpers');
-const { generateToken } = require('../utils/helpers');
+const { formatDate, generateToken, logActivity } = require('../utils/helpers');
 
 let statisticsCache = {
   data: null,
@@ -164,6 +163,7 @@ const createAdminAccount = async (req, res) => {
       department: department?.trim() || '',
       position: position?.trim() || '',
       role: normalizedRole,
+      companyId: req.user.companyId || null,
       isActive: true,
     });
 
@@ -1287,6 +1287,22 @@ const updateLeaveRequest = async (req, res) => {
     leaveRequest.adminComment = adminComment?.trim() || '';
 
     await leaveRequest.save();
+
+    // ── Log Activity (if approved) ───────────────────────────────
+    if (status === 'approved') {
+      const approvalTimeStr = new Date().toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+      await logActivity(
+        leaveRequest.userId,
+        'leave-approved',
+        `Leave Approved – ${approvalTimeStr}`,
+        leaveRequest.companyId,
+        { leaveRequestId: leaveRequest._id }
+      );
+    }
 
     const updated = await LeaveRequest.findById(leaveRequest._id)
       .populate('userId', 'name email employeeId')

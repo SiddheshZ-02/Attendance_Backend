@@ -39,9 +39,31 @@ const calculateWorkingHours = (checkInTime, checkOutTime) => {
   return Math.round(hours * 100) / 100;
 };
 
+// Log activity to the database
+const logActivity = async (userId, type, description, companyId = null, metadata = {}) => {
+  try {
+    const Activity = require('../models/Activity');
+    const now = new Date();
+    const date = formatDate(now);
+    
+    await Activity.create({
+      userId,
+      companyId,
+      type,
+      description,
+      timestamp: now,
+      date,
+      metadata,
+    });
+  } catch (error) {
+    console.error('❌ Log activity error:', error);
+  }
+};
+
 module.exports = {
   calculateDistance,
   generateToken,
   formatDate,
-  calculateWorkingHours
+  calculateWorkingHours,
+  logActivity,
 };
