@@ -53,6 +53,44 @@ const getTodayActivities = async (req, res) => {
   }
 };
 
+// ═════════════════════════════════════════════════════════════════
+// @desc    Get user's recent activities (across all dates)
+// @route   GET /api/activity/recent
+// @access  Private
+// Query:   ?limit=10
+// ═════════════════════════════════════════════════════════════════
+const getRecentActivities = async (req, res) => {
+  try {
+    const { limit = 10 } = req.query;
+
+    const query = {
+      userId: req.user._id,
+    };
+
+    if (req.user.companyId) {
+      query.companyId = req.user.companyId;
+    }
+
+    const activities = await Activity.find(query)
+      .sort({ timestamp: -1 })
+      .limit(Number(limit))
+      .lean();
+
+    return res.json({
+      success: true,
+      activities,
+    });
+  } catch (error) {
+    console.error('❌ Get recent activities error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+    });
+  }
+};
+
 module.exports = {
   getTodayActivities,
+  getRecentActivities,
 };

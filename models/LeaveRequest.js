@@ -24,6 +24,11 @@ const leaveRequestSchema = new mongoose.Schema(
       required: true,
     },
 
+    isHalfDay: {
+      type: Boolean,
+      default: false,
+    },
+
     // Auto-calculated on save: number of calendar days requested
     totalDays: {
       type: Number,

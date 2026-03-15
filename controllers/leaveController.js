@@ -11,80 +11,55 @@ const User = require('../models/User');
 // ═════════════════════════════════════════════════════════════════
 const submitLeaveRequest = async (req, res) => {
   try {
-    let { startDate, endDate, reason, leaveTypeId, payType } = req.body;
-    payType = payType?.toLowerCase() || 'paid';
+    const { startDate, endDate, reason, leaveTypeId, payType, isHalfDay, totalDays } = req.body;
 
-    if (!startDate || !endDate || !reason || !leaveTypeId) {
+    if (totalDays === undefined || !startDate || !endDate || !reason || !leaveTypeId) {
       return res.status(400).json({
         success: false,
         code: 'MISSING_FIELDS',
-        message: 'startDate, endDate, reason, and leaveTypeId are required.',
+        message: 'Required fields are missing (startDate, endDate, reason, leaveTypeId, totalDays).'
+      });
+    }
+
+    if (typeof totalDays !== 'number' || totalDays <= 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_TOTAL_DAYS',
+        message: 'totalDays must be a positive number.'
+      });
+    }
+
+    const isHalfDayBool = isHalfDay === true || isHalfDay === 'true';
+    if (isHalfDayBool && totalDays !== 0.5) {
+      return res.status(400).json({
+        success: false,
+        code: 'HALF_DAY_MISMATCH',
+        message: `For a half-day leave, totalDays must be 0.5, but received ${totalDays}.`
       });
     }
 
     const type = await LeaveType.findById(leaveTypeId);
     if (!type || !type.isActive) {
-      return res.status(400).json({
-        success: false,
-        code: 'INVALID_LEAVE_TYPE',
-        message: 'Invalid or inactive leave type.',
-      });
+      return res.status(400).json({ success: false, code: 'INVALID_LEAVE_TYPE', message: 'Invalid or inactive leave type.' });
     }
 
     const start = new Date(startDate);
     const end = new Date(endDate);
-
-    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-      return res.status(400).json({
-        success: false,
-        code: 'INVALID_DATE',
-        message: 'Invalid date format. Use YYYY-MM-DD.',
-      });
-    }
-
-    if (start > end) {
-      return res.status(400).json({
-        success: false,
-        code: 'INVALID_DATE_RANGE',
-        message: 'End date must be on or after start date.',
-      });
-    }
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (start < today) {
-      return res.status(400).json({
-        success: false,
-        code: 'PAST_DATE',
-        message: 'Cannot apply for leave on past dates.',
-      });
-    }
-
-    const diffMs = end - start;
-    const totalDays = Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1;
     const currentYear = start.getFullYear().toString();
 
-    // ─── Balance Check (Only for Paid Leave) ────────────────────────
     if (payType === 'paid') {
-      const balance = await EmployeeLeaveBalance.findOne({
-        userId: req.user._id,
-        leaveTypeId,
-        year: currentYear,
-        status: 'active',
-      });
-
+      const balance = await EmployeeLeaveBalance.findOne({ userId: req.user._id, leaveTypeId, year: currentYear });
       if (!balance || balance.remainingDays < totalDays) {
         return res.status(400).json({
           success: false,
           code: 'INSUFFICIENT_BALANCE',
-          message: `Insufficient leave balance. Available: ${balance ? balance.remainingDays : 0} days.`,
+          message: `Insufficient leave balance. Available: ${balance ? balance.remainingDays : 0} days.`
         });
       }
     }
 
     const overlapping = await LeaveRequest.findOne({
       userId: req.user._id,
-      companyId: req.user.companyId || null,
       status: { $in: ['pending', 'approved'] },
       $or: [
         { startDate: { $gte: start, $lte: end } },
@@ -97,8 +72,7 @@ const submitLeaveRequest = async (req, res) => {
       return res.status(400).json({
         success: false,
         code: 'OVERLAPPING_LEAVE',
-        message: `You already have a ${overlapping.status} leave request from 
-          ${overlapping.startDate.toDateString()} to ${overlapping.endDate.toDateString()}.`,
+        message: `You already have a ${overlapping.status} leave request for these dates.`
       });
     }
 
@@ -107,26 +81,20 @@ const submitLeaveRequest = async (req, res) => {
       companyId: req.user.companyId || null,
       startDate: start,
       endDate: end,
+      isHalfDay: isHalfDayBool,
       reason: reason.trim(),
       leaveType: type.name,
       leaveTypeId,
-      payType,
+      payType: payType?.toLowerCase() || 'paid',
       status: 'pending',
-      totalDays,
+      totalDays, // Directly use the validated totalDays from the request
     });
 
-    return res.status(201).json({
-      success: true,
-      message: 'Leave request submitted successfully.',
-      leaveRequest,
-    });
+    return res.status(201).json({ success: true, message: 'Leave request submitted successfully.', leaveRequest });
+
   } catch (error) {
     console.error('❌ Submit leave request error:', error);
-    return res.status(500).json({
-      success: false,
-      code: 'SERVER_ERROR',
-      message: 'Something went wrong.',
-    });
+    return res.status(500).json({ success: false, code: 'SERVER_ERROR', message: 'Something went wrong.' });
   }
 };
 

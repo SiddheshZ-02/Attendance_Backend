@@ -2,6 +2,7 @@ const Attendance = require('../models/Attendance');
 const OfficeLocation = require('../models/OfficeLocation');
 const WeekOffConfig = require('../models/WeekOffConfig');
 const Holiday = require('../models/Holiday');
+const LeaveRequest = require('../models/LeaveRequest');
 const { calculateDistance, formatDate, calculateWorkingHours, logActivity } = require('../utils/helpers');
 
 // ─────────────────────────────────────────────────────────────────
@@ -29,13 +30,22 @@ const formatHours = (decimalHours) => {
 // ─────────────────────────────────────────────────────────────────
 // HELPER — build the stats object the frontend expects
 // ─────────────────────────────────────────────────────────────────
-const buildStats = (attendance) => ({
-  firstCheckIn: formatTime(attendance?.checkInTime),
-  lastCheckOut: formatTime(attendance?.checkOutTime),
-  totalHours: attendance?.workingHours
-    ? formatHours(attendance.workingHours)
-    : '--:--',
-});
+const buildStats = (attendance) => {
+  let workingHours = attendance?.workingHours;
+
+  // If checked in but not checked out, calculate "live" hours so far
+  if (attendance && attendance.status === 'checked-in' && !workingHours) {
+    workingHours = calculateWorkingHours(attendance.checkInTime, new Date());
+  }
+
+  return {
+    firstCheckIn: formatTime(attendance?.checkInTime),
+    lastCheckOut: formatTime(attendance?.checkOutTime),
+    totalHours: (workingHours || workingHours === 0)
+      ? formatHours(workingHours)
+      : '--:--',
+  };
+};
 
 
 // ═════════════════════════════════════════════════════════════════
@@ -424,6 +434,13 @@ const getAttendanceHistory = async (req, res) => {
       .limit(100)
       .lean(); // lean() for better performance — returns plain JS objects
 
+    // ── Update live working hours for active sessions ──────────────
+    attendanceRecords.forEach((r) => {
+      if (r.status === 'checked-in' && (!r.workingHours || r.workingHours === 0)) {
+        r.workingHours = calculateWorkingHours(r.checkInTime, new Date());
+      }
+    });
+
     // ── Statistics ────────────────────────────────────────────────
     const totalDays = attendanceRecords.length;
 
@@ -493,6 +510,37 @@ const getAttendanceCalendar = async (req, res) => {
       holidayMap.set(h.date, h.name);
     });
 
+    // Convert strings to Date objects for proper comparison in MongoDB
+    const startDateObj = new Date(rangeStart);
+    const endDateObj = new Date(rangeEnd);
+    endDateObj.setHours(23, 59, 59, 999); // Ensure full range coverage
+
+    const approvedLeaves = await LeaveRequest.find({
+      userId: req.user._id,
+      status: 'approved',
+      $or: [
+        { 
+          startDate: { $lte: endDateObj },
+          endDate: { $gte: startDateObj }
+        }
+      ]
+    }).lean();
+
+    const leaveDates = new Set();
+    const leaveTypes = new Map();
+    approvedLeaves.forEach(leave => {
+      let current = new Date(leave.startDate);
+      const last = new Date(leave.endDate);
+      while (current <= last) {
+        const dateStr = formatDate(current);
+        leaveDates.add(dateStr);
+        if (leave.leaveType) {
+          leaveTypes.set(dateStr, leave.leaveType);
+        }
+        current.setDate(current.getDate() + 1);
+      }
+    });
+
     const attendanceRecords = await Attendance.find({
       userId: req.user._id,
       date: { $gte: rangeStart, $lte: rangeEnd },
@@ -508,6 +556,7 @@ const getAttendanceCalendar = async (req, res) => {
     const days = [];
     let presentDays = 0;
     let leaveDays = 0;
+    let absentDays = 0;
     let weekOffDaysCount = 0;
     let holidayCount = 0;
     let totalHoursDecimal = 0;
@@ -515,24 +564,52 @@ const getAttendanceCalendar = async (req, res) => {
     const cursor = new Date(rangeStart);
     const end = new Date(rangeEnd);
 
+    // RESTRICTION: Ensure we don't show data before account creation
+    const accountCreatedAt = req.user.createdAt ? new Date(req.user.createdAt) : null;
+    if (accountCreatedAt) {
+      // Set to start of day for accurate comparison
+      accountCreatedAt.setHours(0, 0, 0, 0);
+      if (cursor < accountCreatedAt) {
+        cursor.setTime(accountCreatedAt.getTime());
+      }
+    }
+
     while (cursor <= end) {
       const dateStr = formatDate(cursor);
       const weekday = cursor.getDay();
       const record = recordsByDate.get(dateStr);
       const holidayName = holidayMap.get(dateStr);
+      const isOnLeave = leaveDates.has(dateStr);
+      const leaveType = leaveTypes.get(dateStr);
 
       let status;
       let workMode = null;
       let checkInTime = null;
       let checkOutTime = null;
       let workingHours = 0;
+      let isWorkOnLeave = false;
 
       if (record) {
-        status = "Present";
+        if (isOnLeave) {
+          isWorkOnLeave = true;
+          if (leaveType === 'Half Day') {
+            status = "Half Day";
+          } else {
+            status = "Present";
+          }
+        } else {
+          status = "Present";
+        }
         workMode = record.workMode || null;
         checkInTime = record.checkInTime || null;
         checkOutTime = record.checkOutTime || null;
         workingHours = record.workingHours || 0;
+
+        // Calculate live hours if currently checked in
+        if (record.status === 'checked-in' && (!workingHours || workingHours === 0)) {
+          workingHours = calculateWorkingHours(checkInTime, new Date());
+        }
+
         presentDays += 1;
         totalHoursDecimal += workingHours;
       } else if (holidayName) {
@@ -542,9 +619,13 @@ const getAttendanceCalendar = async (req, res) => {
       } else if (weekOffDays.includes(weekday)) {
         status = "Week Off";
         weekOffDaysCount += 1;
-      } else {
+      } else if (isOnLeave) {
         status = "Leave";
         leaveDays += 1;
+      } else {
+        // Not a weekend, holiday, record, or approved leave -> Absent
+        status = "Absent";
+        absentDays += 1;
       }
 
       days.push({
@@ -554,14 +635,17 @@ const getAttendanceCalendar = async (req, res) => {
         checkInTime,
         checkOutTime,
         workingHours,
+        isWorkOnLeave,
       });
 
       cursor.setDate(cursor.getDate() + 1);
     }
 
     const statistics = {
+      totalDays: days.length,
       presentDays,
       leaveDays,
+      absentDays,
       weekOffDays: weekOffDaysCount,
       holidayDays: holidayCount,
       totalHours: formatHours(totalHoursDecimal),
