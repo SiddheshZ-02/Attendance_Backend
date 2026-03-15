@@ -7,10 +7,12 @@ const {
   getLeaveTypes,
   addLeaveType,
   updateLeaveType,
+  deleteLeaveType,
   grantYearlyLeaves,
   getEmployeeBalances,
   getAllLeaveRequests,
-  updateLeaveStatus
+  updateLeaveStatus,
+  getGrantStatus
 } = require('../controllers/leaveController');
 const { protect, admin } = require('../middleware/authMiddleware');
 
@@ -24,7 +26,9 @@ router.get('/types', protect, getLeaveTypes);
 // ─── Admin Routes ────────────────────────────────────────────────
 router.post('/types', protect, admin, addLeaveType);
 router.put('/types/:id', protect, admin, updateLeaveType);
+router.delete('/types/:id', protect, admin, deleteLeaveType);
 router.post('/grant-yearly', protect, admin, grantYearlyLeaves);
+router.get('/admin/grant-status', protect, admin, getGrantStatus);
 router.get('/admin/requests', protect, admin, getAllLeaveRequests);
 router.put('/request/:id/status', protect, admin, updateLeaveStatus);
 

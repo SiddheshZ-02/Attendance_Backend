@@ -674,27 +674,35 @@ const getAttendanceCalendar = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════
 const getOfficeLocation = async (req, res) => {
   try {
-    const officeLocation = await OfficeLocation.findOne({ isActive: true });
+    const filter = { isActive: true };
+    if (req.user.companyId) {
+      filter.companyId = req.user.companyId;
+    }
 
-    if (!officeLocation) {
+    const officeLocations = await OfficeLocation.find(filter).lean();
+
+    if (!officeLocations || officeLocations.length === 0) {
       return res.status(404).json({
         success: false,
         code: 'OFFICE_NOT_CONFIGURED',
-        message: 'Office location is not configured. Please contact admin.',
+        message: 'No office locations are configured. Please contact admin.',
       });
     }
 
+    const mapped = officeLocations.map((loc) => ({
+      id: loc._id,
+      name: loc.name,
+      address: loc.address,
+      location: loc.location,
+      radius: loc.radius,
+    }));
+
     return res.json({
       success: true,
-      officeLocation: {
-        name: officeLocation.name,
-        address: officeLocation.address,
-        location: officeLocation.location,
-        radius: officeLocation.radius,
-      },
+      officeLocations: mapped,
     });
   } catch (error) {
-    console.error('❌ Get office location error:', error);
+    console.error('❌ Get office locations error:', error);
     return res.status(500).json({
       success: false,
       code: 'SERVER_ERROR',

@@ -197,6 +197,37 @@ const updateLeaveType = async (req, res) => {
   }
 };
 
+const deleteLeaveType = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const leaveType = await LeaveType.findById(id);
+
+    if (!leaveType) {
+      return res.status(404).json({ success: false, message: 'Leave type not found' });
+    }
+
+    // Optional: Check if leave type is being used in any leave requests or balances
+    const inUseRequests = await LeaveRequest.exists({ leaveTypeId: id });
+    const inUseBalances = await EmployeeLeaveBalance.exists({ leaveTypeId: id });
+
+    if (inUseRequests || inUseBalances) {
+      // Instead of hard delete, we could just deactivate it
+      leaveType.isActive = false;
+      await leaveType.save();
+      return res.json({ 
+        success: true, 
+        message: 'Leave type is in use, so it has been deactivated instead of deleted.' 
+      });
+    }
+
+    await LeaveType.findByIdAndDelete(id);
+    return res.json({ success: true, message: 'Leave type deleted successfully' });
+  } catch (error) {
+    console.error('Delete leave type error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
 const grantYearlyLeaves = async (req, res) => {
   try {
     const { year, employeeIds } = req.body;
@@ -346,6 +377,31 @@ const updateLeaveStatus = async (req, res) => {
   }
 };
 
+const getGrantStatus = async (req, res) => {
+  try {
+    const { year } = req.query;
+    if (!year) {
+      return res.status(400).json({ success: false, message: 'Year is required' });
+    }
+
+    const balances = await EmployeeLeaveBalance.find({
+      year,
+      companyId: req.user.companyId,
+    }).distinct('userId');
+
+    // Return a map of userId -> granted (true)
+    const grantMap = {};
+    balances.forEach(id => {
+      grantMap[id.toString()] = true;
+    });
+
+    return res.json({ success: true, grantMap });
+  } catch (error) {
+    console.error('Get grant status error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
 module.exports = {
   submitLeaveRequest,
   getMyLeaveRequests,
@@ -353,8 +409,10 @@ module.exports = {
   getLeaveTypes,
   addLeaveType,
   updateLeaveType,
+  deleteLeaveType,
   grantYearlyLeaves,
   getEmployeeBalances,
   getAllLeaveRequests,
   updateLeaveStatus,
+  getGrantStatus,
 };

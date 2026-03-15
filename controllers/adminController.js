@@ -514,10 +514,36 @@ const deleteEmployee = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════
 const createEmployee = async (req, res) => {
   try {
-    const { name, email, password, employeeId, department, phone, position } =
+    let { name, email, password, employeeId, department, phone, position } =
       req.body;
 
-    // ── 1. Validate required fields ───────────────────────────────
+    // ── 1. Auto-generate employeeId if missing or invalid format ──
+    if (!employeeId || !/^EMP\d{2,9}$/.test(employeeId)) {
+      const allEmployees = await User.find({ 
+        role: 'employee',
+        employeeId: { $regex: /^EMP\d+$/ } 
+      }).select('employeeId').lean();
+
+      let maxNum = 0;
+      allEmployees.forEach(emp => {
+        const match = emp.employeeId.match(/^EMP(\d+)$/);
+        if (match && match[1].length < 10) {
+          const num = parseInt(match[1], 10);
+          if (num > maxNum) maxNum = num;
+        }
+      });
+      
+      let nextNum = maxNum + 1;
+      employeeId = `EMP${nextNum.toString().padStart(2, '0')}`;
+      
+      // Safety check: ensure it doesn't exist
+      while (await User.findOne({ employeeId })) {
+        nextNum++;
+        employeeId = `EMP${nextNum.toString().padStart(2, '0')}`;
+      }
+    }
+
+    // ── 2. Validate required fields ───────────────────────────────
     if (!name || !email || !password || !employeeId) {
       return res.status(400).json({
         success: false,
@@ -699,6 +725,7 @@ const getAllAttendance = async (req, res) => {
 
     const attendanceRecords = await Attendance.find(query)
       .populate('userId', 'name email employeeId department')
+      .populate('officeLocationId', 'name address')
       .sort({ checkInTime: -1 })
       .skip(skip)
       .limit(Number(limit))
@@ -1212,7 +1239,12 @@ const getLeaveRequests = async (req, res) => {
     if (req.user.companyId) {
       query.companyId = req.user.companyId;
     }
-    if (status) query.status = status;
+    if (status) {
+      query.status = status;
+    } else {
+      // Exclude cancelled leaves by default when showing "all"
+      query.status = { $ne: 'cancelled' };
+    }
     if (userId) query.userId = userId;
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -1402,7 +1434,7 @@ const getDepartments = async (req, res) => {
       limit = 20,
     } = req.query;
 
-    const query = {};
+    const query = { companyId: req.user.companyId || null };
 
     if (search) {
       query.$or = [
@@ -1429,6 +1461,7 @@ const getDepartments = async (req, res) => {
         const employeeCount = await User.countDocuments({
           role: 'employee',
           isActive: true,
+          companyId: req.user.companyId || null,
           department: dept.name,
         });
         return { ...dept, employeeCount };
@@ -1504,6 +1537,7 @@ const createDepartment = async (req, res) => {
     const employeeCount = await User.countDocuments({
       role: 'employee',
       isActive: true,
+      companyId: req.user.companyId || null,
       department: department.name,
     });
 
@@ -1542,8 +1576,11 @@ const updateDepartmentDetails = async (req, res) => {
     }
 
     if (name && name.trim() !== department.name) {
+      const oldName = department.name;
+      const newName = name.trim();
+
       const existing = await Department.findOne({
-        name: name.trim(),
+        name: newName,
         companyId: req.user.companyId || null,
         _id: { $ne: department._id },
       });
@@ -1554,7 +1591,17 @@ const updateDepartmentDetails = async (req, res) => {
           message: 'A department with this name already exists.',
         });
       }
-      department.name = name.trim();
+
+      // Update all employees in this department to the new name
+      await User.updateMany(
+        {
+          companyId: req.user.companyId || null,
+          department: oldName,
+        },
+        { $set: { department: newName } }
+      );
+
+      department.name = newName;
     }
 
     if (description !== undefined) {
@@ -1581,6 +1628,7 @@ const updateDepartmentDetails = async (req, res) => {
     const employeeCount = await User.countDocuments({
       role: 'employee',
       isActive: true,
+      companyId: req.user.companyId || null,
       department: department.name,
     });
 
@@ -1618,6 +1666,7 @@ const deleteDepartment = async (req, res) => {
 
     const employeeCount = await User.countDocuments({
       role: 'employee',
+      companyId: req.user.companyId || null,
       department: department.name,
     });
 
