@@ -374,6 +374,7 @@ const updateEmployeeDetails = async (req, res) => {
       department,
       phone,
       position,
+      dateOfBirth,
       isActive,
     } = req.body;
 
@@ -431,6 +432,9 @@ const updateEmployeeDetails = async (req, res) => {
     }
     if (position !== undefined) {
       employee.position = String(position).trim();
+    }
+    if (dateOfBirth !== undefined) {
+      employee.dateOfBirth = dateOfBirth;
     }
     if (typeof isActive === 'boolean') {
       employee.isActive = isActive;
@@ -514,7 +518,7 @@ const deleteEmployee = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════
 const createEmployee = async (req, res) => {
   try {
-    let { name, email, password, employeeId, department, phone, position } =
+    let { name, email, password, employeeId, department, phone, position, dateOfBirth } =
       req.body;
 
     // ── 1. Auto-generate employeeId if missing or invalid format ──
@@ -599,6 +603,7 @@ const createEmployee = async (req, res) => {
       department: department?.trim() || '',
       phone: phone?.trim() || '',
       position: position?.trim() || '',
+      dateOfBirth: dateOfBirth || null,
       role: 'employee',
       isActive: true,
       companyId: req.user.companyId || null,

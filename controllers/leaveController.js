@@ -2,6 +2,7 @@ const LeaveRequest = require('../models/LeaveRequest');
 const LeaveType = require('../models/LeaveType');
 const EmployeeLeaveBalance = require('../models/EmployeeLeaveBalance');
 const User = require('../models/User');
+const { logActivity } = require('../utils/helpers');
 
 // ═════════════════════════════════════════════════════════════════
 // @desc    Submit a new leave request
@@ -370,6 +371,17 @@ const updateLeaveStatus = async (req, res) => {
     }
 
     await leaveRequest.save();
+
+    // ── Log Activity (Only if approved) ──────────────────────────
+    if (status === 'approved') {
+      await logActivity(
+        leaveRequest.userId,
+        'leave-approved',
+        `Leave Approved – ${leaveRequest.leaveType}`,
+        leaveRequest.companyId
+      );
+    }
+
     return res.json({ success: true, message: `Leave ${status}` });
   } catch (error) {
     console.error('Update leave status error:', error);

@@ -39,8 +39,8 @@ const buildStats = (attendance) => {
   }
 
   return {
-    firstCheckIn: formatTime(attendance?.checkInTime),
-    lastCheckOut: formatTime(attendance?.checkOutTime),
+    firstCheckIn: attendance?.checkInTime || null,
+    lastCheckOut: attendance?.checkOutTime || null,
     totalHours: (workingHours || workingHours === 0)
       ? formatHours(workingHours)
       : '--:--',
@@ -167,15 +167,10 @@ const checkIn = async (req, res) => {
     });
 
     // ── Log Activity ─────────────────────────────────────────────
-    const checkInTimeStr = new Date(attendance.checkInTime).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
     await logActivity(
       req.user._id,
       'check-in',
-      `Clock In – ${checkInTimeStr}`,
+      `Clock In`,
       req.user.companyId
     );
 
@@ -323,15 +318,10 @@ const checkOut = async (req, res) => {
     await attendance.save();
 
     // ── Log Activity ─────────────────────────────────────────────
-    const checkOutTimeStr = new Date(attendance.checkOutTime).toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
     await logActivity(
       req.user._id,
       'check-out',
-      `Clock Out – ${checkOutTimeStr}`,
+      `Clock Out`,
       req.user.companyId
     );
 

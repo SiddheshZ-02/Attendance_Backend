@@ -40,11 +40,11 @@ const calculateWorkingHours = (checkInTime, checkOutTime) => {
 };
 
 // Log activity to the database
-const logActivity = async (userId, type, description, companyId = null, metadata = {}) => {
+const logActivity = async (userId, type, description, companyId = null, metadata = {}, customDate = null) => {
   try {
     const Activity = require('../models/Activity');
     const now = new Date();
-    const date = formatDate(now);
+    const date = customDate || formatDate(now);
     
     await Activity.create({
       userId,

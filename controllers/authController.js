@@ -267,15 +267,10 @@ const updateUserProfile = async (req, res) => {
     const updatedUser = await user.save();
 
     // ── Log Activity ─────────────────────────────────────────────
-    const updateTimeStr = new Date().toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    });
     await logActivity(
       user._id,
       'profile-update',
-      `Profile Updated – ${updateTimeStr}`,
+      `Profile Updated`,
       user.companyId
     );
 
@@ -471,6 +466,108 @@ const refreshAccessToken = async (req, res) => {
   }
 };
 
+  // ═════════════════════════════════════════════════════════════════════════════
+// @desc    Get colleagues (for birthdays, etc)
+// @route   GET /api/auth/colleagues
+// @access  Private
+// ═════════════════════════════════════════════════════════════════════════════
+const getColleagues = async (req, res) => {
+  try {
+    const query = {
+      isActive: true,
+      role: { $in: ['employee', 'manager', 'admin'] },
+    };
+
+    if (req.user.companyId) {
+      query.companyId = req.user.companyId;
+    }
+
+    const colleagues = await User.find(query)
+      .select('name department dateOfBirth email employeeId isActive createdAt position')
+      .sort({ name: 1 })
+      .lean();
+
+    // Ensure dateOfBirth is present in the response even if null
+    const employeesWithDob = colleagues.map(emp => ({
+      ...emp,
+      dateOfBirth: emp.dateOfBirth || null
+    }));
+
+    return res.json({
+      success: true,
+      employees: employeesWithDob,
+    });
+  } catch (error) {
+    console.error('❌ Get colleagues error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch colleagues.',
+    });
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
+// @desc    Get upcoming birthdays for the organization
+// @route   GET /api/auth/birthdays
+// @access  Private
+// ═════════════════════════════════════════════════════════════════════════════
+const getUpcomingBirthdays = async (req, res) => {
+  try {
+    const query = {
+      isActive: true,
+      dateOfBirth: { $ne: null },
+    };
+
+    if (req.user.companyId) {
+      query.companyId = req.user.companyId;
+    }
+
+    const users = await User.find(query)
+      .select('name department dateOfBirth role position companyId')
+      .lean();
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const upcomingBirthdays = users
+      .map((u) => {
+        const dob = new Date(u.dateOfBirth);
+        const birthdayThisYear = new Date(
+          today.getFullYear(),
+          dob.getMonth(),
+          dob.getDate()
+        );
+
+        if (birthdayThisYear < today) {
+          birthdayThisYear.setFullYear(today.getFullYear() + 1);
+        }
+
+        const diffTime = birthdayThisYear.getTime() - today.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        return {
+          ...u,
+          id: u._id,
+          daysUntil: diffDays,
+          birthdayDate: birthdayThisYear,
+        };
+      })
+      .filter((u) => u.daysUntil >= 0 && u.daysUntil <= 10)
+      .sort((a, b) => a.daysUntil - b.daysUntil);
+
+    return res.json({
+      success: true,
+      birthdays: upcomingBirthdays,
+    });
+  } catch (error) {
+    console.error('❌ Get upcoming birthdays error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch upcoming birthdays.',
+    });
+  }
+};
+
 module.exports = {
   loginUser,
   logoutUser,
@@ -479,4 +576,6 @@ module.exports = {
   forgotPassword,
   resetPassword,
   refreshAccessToken,
+  getColleagues,
+  getUpcomingBirthdays,
 };

@@ -8,6 +8,8 @@ const {
   forgotPassword,
   resetPassword,
   refreshAccessToken,
+  getColleagues,
+  getUpcomingBirthdays,
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 const User = require('../models/User');
@@ -22,26 +24,15 @@ router.get('/fix-company', protect, async (req, res) => {
   res.json({ message: 'Company assigned', companyId: company._id });
 });
 
-// ─── Auth Routes ───────────────────────────────────────────────────────────────
-// POST /api/auth/login           → login with email + password
-// POST /api/auth/logout          → logout [Protected]
+// ── Auth Routes ──────────────────────────────────────────────────
 router.post('/login', loginUser);
-router.post('/refresh', refreshAccessToken);
 router.post('/logout', protect, logoutUser);
-
-// ─── Profile Routes ────────────────────────────────────────────────────────────
-// GET  /api/auth/profile         → get current user profile [Protected]
-// PUT  /api/auth/profile         → update name, phone, department, password [Protected]
-router
-  .route('/profile')
-  .get(protect, getUserProfile)
-  .put(protect, updateUserProfile);
-
-// ─── Password Reset Routes ─────────────────────────────────────────────────────
-// POST /api/auth/forgot-password → request reset token (sent via email in prod)
-// POST /api/auth/reset-password  → reset password using token
+router.get('/profile', protect, getUserProfile);
+router.put('/profile', protect, updateUserProfile);
 router.post('/forgot-password', forgotPassword);
-router.post('/reset-password', resetPassword);
-
+router.post('/reset-password/:token', resetPassword);
+router.post('/refresh-token', refreshAccessToken);
+router.get('/colleagues', protect, getColleagues);
+router.get('/birthdays', protect, getUpcomingBirthdays);
 
 module.exports = router;

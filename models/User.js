@@ -65,6 +65,10 @@ const userSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    dateOfBirth: {
+      type: Date,
+      default: null,
+    },
 
     // ── Account Status ─────────────────────────────────────────────
     isActive: {
