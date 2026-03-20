@@ -104,24 +104,27 @@ const loginUser = async (req, res) => {
       }
     }
 
-    // ── 8. Generate token & respond ───────────────────────────────
+    // ── 8. Generate tokens & respond ──────────────────────────────
     securityLogger.authSuccess(user._id, req.ip, req.get('User-Agent'));
 
     const sessionId = (crypto.randomUUID && crypto.randomUUID()) || crypto.randomBytes(16).toString('hex');
-    user.activeSessionId = sessionId;
-    const refreshToken = crypto.randomBytes(32).toString('hex');
-    user.refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-    user.refreshTokenExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    await user.save();
+    
+    // Generate both Access and Refresh tokens (JWT-based)
+    const { accessToken, refreshToken } = generateToken(user._id, sessionId);
 
-    const token = generateToken(user._id, sessionId);
+    // Store session and refresh token hash in DB
+    user.activeSessionId = sessionId;
+    user.refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    user.refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    user.lastLoginAt = new Date();
+    await user.save();
 
     const response = {
       success: true,
       data: {
         ...sanitizeUser(user),
-        token,
-        refreshToken,
+        token: accessToken,
+        refreshToken: refreshToken,
       },
     };
 
@@ -142,6 +145,107 @@ const loginUser = async (req, res) => {
   }
 };
 
+
+// ═════════════════════════════════════════════════════════════════════════════
+// @desc    Refresh Access Token
+// @route   POST /api/auth/refresh
+// @access  Public (Requires valid refresh token)
+// ═════════════════════════════════════════════════════════════════════════════
+const refreshAccessToken = async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res.status(401).json({
+        success: false,
+        code: 'NO_REFRESH_TOKEN',
+        message: 'Refresh token is required.',
+      });
+    }
+
+    const jwt = require('jsonwebtoken');
+    const secret = process.env.REFRESH_TOKEN_SECRET || 'your-refresh-secret-key-change-in-production';
+
+    // 1. Verify token structure/expiry
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, secret);
+    } catch (err) {
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_REFRESH_TOKEN',
+        message: 'Refresh token is invalid or expired.',
+      });
+    }
+
+    // 2. Find user & check refresh token hash
+    const user = await User.findById(decoded.id);
+    if (!user || !user.refreshTokenHash) {
+      return res.status(401).json({
+        success: false,
+        code: 'SESSION_EXPIRED',
+        message: 'User session no longer exists.',
+      });
+    }
+
+    // 3. Compare hash
+    const incomingHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    if (incomingHash !== user.refreshTokenHash) {
+      // Potential theft! Revoke everything
+      user.activeSessionId = null;
+      user.refreshTokenHash = null;
+      user.refreshTokenExpires = null;
+      await user.save();
+      
+      return res.status(401).json({
+        success: false,
+        code: 'TOKEN_THEFT_DETECTED',
+        message: 'Security breach detected. Please log in again.',
+      });
+    }
+
+    // 4. Check if expired in DB
+    if (user.refreshTokenExpires && user.refreshTokenExpires < new Date()) {
+      return res.status(401).json({
+        success: false,
+        code: 'REFRESH_TOKEN_EXPIRED',
+        message: 'Your session has expired. Please log in again.',
+      });
+    }
+
+    // 5. Check if session is still active
+    if (!user.activeSessionId || decoded.sid !== user.activeSessionId) {
+      return res.status(401).json({
+        success: false,
+        code: 'SESSION_REVOKED',
+        message: 'Session has been revoked or updated elsewhere.',
+      });
+    }
+
+    // 6. Generate new tokens (Rotation)
+    const { accessToken, refreshToken: newRefreshToken } = generateToken(user._id, user.activeSessionId);
+
+    // Update refresh token in DB (Refresh Token Rotation for security)
+    user.refreshTokenHash = crypto.createHash('sha256').update(newRefreshToken).digest('hex');
+    user.refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    await user.save();
+
+    return res.json({
+      success: true,
+      data: {
+        token: accessToken,
+        refreshToken: newRefreshToken,
+      },
+    });
+  } catch (error) {
+    securityLogger.systemError(error, req);
+    return res.status(500).json({
+      success: false,
+      code: 'REFRESH_ERROR',
+      message: 'Failed to refresh token.',
+    });
+  }
+};
 
 // ═════════════════════════════════════════════════════════════════════════════
 // @desc    Logout user
@@ -417,56 +521,7 @@ const resetPassword = async (req, res) => {
 };
 
 
-const refreshAccessToken = async (req, res) => {
-  try {
-    const { refreshToken } = req.body || {};
-    if (!refreshToken) {
-      return res.status(400).json({
-        success: false,
-        code: 'MISSING_REFRESH_TOKEN',
-        message: 'Refresh token is required.',
-      });
-    }
-
-    const hash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-    const user = await User.findOne({
-      refreshTokenHash: hash,
-      refreshTokenExpires: { $gt: new Date() },
-    });
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        code: 'INVALID_REFRESH',
-        message: 'Refresh token is invalid or expired.',
-      });
-    }
-
-    if (!user.activeSessionId) {
-      return res.status(401).json({
-        success: false,
-        code: 'SESSION_REVOKED',
-        message: 'Your session is no longer active. Please log in again.',
-      });
-    }
-
-    const token = generateToken(user._id, user.activeSessionId);
-
-    return res.json({
-      success: true,
-      data: { token },
-    });
-  } catch (error) {
-    securityLogger.systemError(error, req);
-    return res.status(500).json({
-      success: false,
-      code: 'REFRESH_ERROR',
-      message: 'Failed to refresh token.',
-    });
-  }
-};
-
-  // ═════════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════════
 // @desc    Get colleagues (for birthdays, etc)
 // @route   GET /api/auth/colleagues
 // @access  Private

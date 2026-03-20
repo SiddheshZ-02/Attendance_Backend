@@ -31,7 +31,7 @@ router.get('/profile', protect, getUserProfile);
 router.put('/profile', protect, updateUserProfile);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password/:token', resetPassword);
-router.post('/refresh-token', refreshAccessToken);
+router.post('/refresh', refreshAccessToken);
 router.get('/colleagues', protect, getColleagues);
 router.get('/birthdays', protect, getUpcomingBirthdays);
 

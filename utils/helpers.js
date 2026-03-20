@@ -15,12 +15,25 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return distance; // in meters
 };
 
-// Generate JWT token
+// Generate JWT tokens (Access and Refresh)
 const generateToken = (id, sessionId) => {
   const jwt = require('jsonwebtoken');
-  return jwt.sign({ id, sid: sessionId }, process.env.JWT_SECRET || 'your-secret-key-change-in-production', {
-    expiresIn: '30d'
-  });
+  
+  // Short-lived access token (e.g., 1 hour)
+  const accessToken = jwt.sign(
+    { id, sid: sessionId }, 
+    process.env.JWT_SECRET || 'your-secret-key-change-in-production', 
+    { expiresIn: '1h' }
+  );
+
+  // Long-lived refresh token (e.g., 7 days)
+  const refreshToken = jwt.sign(
+    { id, sid: sessionId }, 
+    process.env.REFRESH_TOKEN_SECRET || 'your-refresh-secret-key-change-in-production', 
+    { expiresIn: '7d' }
+  );
+
+  return { accessToken, refreshToken };
 };
 
 // Format date to YYYY-MM-DD
