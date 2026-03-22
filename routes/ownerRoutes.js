@@ -4,12 +4,13 @@ const {
   createCompany,
   getOwnerCompanies,
   getCompanyAdmins,
+  getOwnerDashboardAnalytics,
 } = require('../controllers/ownerController');
 const { protect, owner } = require('../middleware/authMiddleware');
 
 router.post('/companies', protect, owner, createCompany);
 router.get('/companies', protect, owner, getOwnerCompanies);
 router.get('/companies/:id/admins', protect, owner, getCompanyAdmins);
+router.get('/dashboard-analytics', protect, owner, getOwnerDashboardAnalytics);
 
 module.exports = router;
-
