@@ -26,11 +26,11 @@ const generateToken = (id, sessionId) => {
     { expiresIn: '1h' }
   );
 
-  // Long-lived refresh token (e.g., 7 days)
+  // Long-lived refresh token (30 days with sliding expiry)
   const refreshToken = jwt.sign(
     { id, sid: sessionId }, 
     process.env.REFRESH_TOKEN_SECRET || 'your-refresh-secret-key-change-in-production', 
-    { expiresIn: '7d' }
+    { expiresIn: '30d' }
   );
 
   return { accessToken, refreshToken };

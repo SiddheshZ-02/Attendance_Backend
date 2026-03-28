@@ -117,7 +117,7 @@ const loginUser = async (req, res) => {
       sessionId: sessionId,
       deviceInfo: req.get('User-Agent') || 'Unknown Device',
       refreshTokenHash: crypto.createHash('sha256').update(refreshToken).digest('hex'),
-      refreshTokenExpires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+      refreshTokenExpires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
     };
 
     // Add session to array and limit to 2 devices
@@ -237,7 +237,7 @@ const refreshAccessToken = async (req, res) => {
 
     // Update refresh token in DB for this specific session (Refresh Token Rotation)
     currentSession.refreshTokenHash = crypto.createHash('sha256').update(newRefreshToken).digest('hex');
-    currentSession.refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    currentSession.refreshTokenExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
     await user.save();
 
     return res.json({
