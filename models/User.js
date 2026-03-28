@@ -81,19 +81,15 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-    activeSessionId: {
-      type: String,
-      default: null,
-    },
-    refreshTokenHash: {
-      type: String,
-      default: null,
-    },
-    refreshTokenExpires: {
-      type: Date,
-      default: null,
-    },
-
+    sessions: [
+      {
+        sessionId: { type: String, required: true },
+        deviceInfo: { type: String, default: null },
+        refreshTokenHash: { type: String, required: true },
+        refreshTokenExpires: { type: Date, required: true },
+        createdAt: { type: Date, default: Date.now },
+      }
+    ],
 
     // ── Password Reset ─────────────────────────────────────────────
     passwordChangedAt: {

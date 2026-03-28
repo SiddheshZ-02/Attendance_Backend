@@ -112,10 +112,21 @@ const loginUser = async (req, res) => {
     // Generate both Access and Refresh tokens (JWT-based)
     const { accessToken, refreshToken } = generateToken(user._id, sessionId);
 
-    // Store session and refresh token hash in DB
-    user.activeSessionId = sessionId;
-    user.refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-    user.refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    // Create new session object
+    const newSession = {
+      sessionId: sessionId,
+      deviceInfo: req.get('User-Agent') || 'Unknown Device',
+      refreshTokenHash: crypto.createHash('sha256').update(refreshToken).digest('hex'),
+      refreshTokenExpires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+    };
+
+    // Add session to array and limit to 2 devices
+    user.sessions.push(newSession);
+    if (user.sessions.length > 2) {
+      // Remove oldest session to strictly keep a maximum of 2 devices
+      user.sessions.shift();
+    }
+    
     user.lastLoginAt = new Date();
     await user.save();
 
@@ -178,23 +189,31 @@ const refreshAccessToken = async (req, res) => {
       });
     }
 
-    // 2. Find user & check refresh token hash
+    // 2. Find user
     const user = await User.findById(decoded.id);
-    if (!user || !user.refreshTokenHash) {
+    if (!user) {
       return res.status(401).json({
         success: false,
         code: 'SESSION_EXPIRED',
-        message: 'User session no longer exists.',
+        message: 'User no longer exists.',
+      });
+    }
+
+    // Find specific session for this token
+    const currentSession = user.sessions.find(s => s.sessionId === decoded.sid);
+    if (!currentSession) {
+      return res.status(401).json({
+        success: false,
+        code: 'SESSION_REVOKED',
+        message: 'Session has been revoked or updated elsewhere.',
       });
     }
 
     // 3. Compare hash
     const incomingHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-    if (incomingHash !== user.refreshTokenHash) {
-      // Potential theft! Revoke everything
-      user.activeSessionId = null;
-      user.refreshTokenHash = null;
-      user.refreshTokenExpires = null;
+    if (incomingHash !== currentSession.refreshTokenHash) {
+      // Potential theft! Revoke this specific session
+      user.sessions = user.sessions.filter(s => s.sessionId !== decoded.sid);
       await user.save();
       
       return res.status(401).json({
@@ -205,7 +224,7 @@ const refreshAccessToken = async (req, res) => {
     }
 
     // 4. Check if expired in DB
-    if (user.refreshTokenExpires && user.refreshTokenExpires < new Date()) {
+    if (currentSession.refreshTokenExpires && currentSession.refreshTokenExpires < new Date()) {
       return res.status(401).json({
         success: false,
         code: 'REFRESH_TOKEN_EXPIRED',
@@ -213,21 +232,12 @@ const refreshAccessToken = async (req, res) => {
       });
     }
 
-    // 5. Check if session is still active
-    if (!user.activeSessionId || decoded.sid !== user.activeSessionId) {
-      return res.status(401).json({
-        success: false,
-        code: 'SESSION_REVOKED',
-        message: 'Session has been revoked or updated elsewhere.',
-      });
-    }
-
     // 6. Generate new tokens (Rotation)
-    const { accessToken, refreshToken: newRefreshToken } = generateToken(user._id, user.activeSessionId);
+    const { accessToken, refreshToken: newRefreshToken } = generateToken(user._id, currentSession.sessionId);
 
-    // Update refresh token in DB (Refresh Token Rotation for security)
-    user.refreshTokenHash = crypto.createHash('sha256').update(newRefreshToken).digest('hex');
-    user.refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    // Update refresh token in DB for this specific session (Refresh Token Rotation)
+    currentSession.refreshTokenHash = crypto.createHash('sha256').update(newRefreshToken).digest('hex');
+    currentSession.refreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
     await user.save();
 
     return res.json({
@@ -256,9 +266,7 @@ const logoutUser = async (req, res) => {
   try {
 
 
-    req.user.activeSessionId = null;
-    req.user.refreshTokenHash = null;
-    req.user.refreshTokenExpires = null;
+    req.user.sessions = req.user.sessions.filter(s => s.sessionId !== req.user.currentSessionId);
     await req.user.save();
 
     securityLogger.authSuccess(req.user._id, req.ip, req.get('User-Agent'));

@@ -59,23 +59,19 @@ const protect = async (req, res, next) => {
     
   
 
-    if (!user.activeSessionId) {
+    const currentSession = user.sessions.find(s => s.sessionId === decoded.sid);
+
+    if (!currentSession) {
       securityLogger.authFailure(user.email, req.ip, req.get('User-Agent'), 'SESSION_REVOKED');
       return res.status(401).json({
         success: false,
         code: 'SESSION_REVOKED',
-        message: 'Your session is no longer active. Please log in again.',
+        message: 'Your session is no longer active or was logged out elsewhere. Please log in again.',
       });
     }
 
-    if (!decoded.sid || decoded.sid !== String(user.activeSessionId)) {
-      securityLogger.authFailure(user.email, req.ip, req.get('User-Agent'), 'TOKEN_REVOKED');
-      return res.status(401).json({
-        success: false,
-        code: 'TOKEN_REVOKED',
-        message: 'This token has been invalidated by a newer login. Please log in again.',
-      });
-    }
+    // Temporarily attach currentSessionId to user to use in logout
+    user.currentSessionId = currentSession.sessionId;
 
     if (decoded.iat && user.changedPasswordAfter(decoded.iat)) {
       return res.status(401).json({
