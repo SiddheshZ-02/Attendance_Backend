@@ -595,13 +595,16 @@ const getAttendanceCalendar = async (req, res) => {
         checkOutTime = record.checkOutTime || null;
         workingHours = record.workingHours || 0;
 
-        // Calculate live hours if currently checked in
-        if (record.status === 'checked-in' && (!workingHours || workingHours === 0)) {
-          workingHours = calculateWorkingHours(checkInTime, new Date());
+        // For incomplete sessions (checked-in but not checked-out), don't add to total hours
+        if (record.status === 'checked-in' && (!checkOutTime || checkOutTime === null)) {
+          // Session is incomplete - don't calculate or add hours
+          workingHours = 0;
+        } else if (record.status === 'checked-out' && workingHours > 0) {
+          // Only add hours for completed sessions
+          totalHoursDecimal += workingHours;
         }
 
         presentDays += 1;
-        totalHoursDecimal += workingHours;
       } else if (holidayName) {
         status = "Holiday";
         workMode = holidayName;
@@ -702,6 +705,314 @@ const getOfficeLocation = async (req, res) => {
 };
 
 
+// ═════════════════════════════════════════════════════════════════
+// @desc    Manual Attendance Entry (for missed attendance)
+// @route   POST /api/attendance/manual-entry
+// @access  Private
+// Body:    { date, workMode, checkInTime, checkOutTime, notes }
+// ═════════════════════════════════════════════════════════════════
+const manualAttendanceEntry = async (req, res) => {
+  try {
+    const { date, workMode, checkInTime, checkOutTime, notes } = req.body;
+
+    // ── 1. Validate required fields ───────────────────────────────
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_DATE',
+        message: 'Date is required.',
+      });
+    }
+
+    if (!workMode || !['Office', 'WFH'].includes(workMode)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_WORK_MODE',
+        message: 'workMode must be either "Office" or "WFH".',
+      });
+    }
+
+    if (!checkInTime) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_CHECKIN_TIME',
+        message: 'Check-in time is required.',
+      });
+    }
+
+    // ── 2. Validate date format (YYYY-MM-DD) ─────────────────────
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(date)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_DATE_FORMAT',
+        message: 'Date must be in YYYY-MM-DD format.',
+      });
+    }
+
+    // ── 3. Prevent future dates ───────────────────────────────────
+    const today = formatDate(new Date());
+    if (date > today) {
+      return res.status(400).json({
+        success: false,
+        code: 'FUTURE_DATE_NOT_ALLOWED',
+        message: 'Cannot add attendance for future dates.',
+      });
+    }
+
+    // ── 4. Check if user account existed on that date ─────────────
+    const accountCreatedAt = req.user.createdAt;
+    if (accountCreatedAt) {
+      const accountDate = formatDate(new Date(accountCreatedAt));
+      if (date < accountDate) {
+        return res.status(400).json({
+          success: false,
+          code: 'DATE_BEFORE_ACCOUNT_CREATION',
+          message: 'Cannot add attendance before your account was created.',
+        });
+      }
+    }
+
+    // ── 5. Prevent duplicate entries for the same date ────────────
+    const existingAttendance = await Attendance.findOne({
+      userId: req.user._id,
+      date: date,
+    });
+
+    if (existingAttendance) {
+      return res.status(400).json({
+        success: false,
+        code: 'DUPLICATE_ENTRY',
+        message: 'Attendance record already exists for this date.',
+        attendance: existingAttendance,
+      });
+    }
+
+    // ── 6. Parse and validate times ───────────────────────────────
+    const checkInDate = new Date(`${date}T${checkInTime}:00`);
+    
+    if (isNaN(checkInDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_CHECKIN_TIME',
+        message: 'Invalid check-in time format. Use HH:MM (24-hour format).',
+      });
+    }
+
+    let checkOutDate = null;
+    let workingHours = 0;
+    let status = 'checked-in';
+
+    if (checkOutTime) {
+      checkOutDate = new Date(`${date}T${checkOutTime}:00`);
+      
+      if (isNaN(checkOutDate.getTime())) {
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_CHECKOUT_TIME',
+          message: 'Invalid check-out time format. Use HH:MM (24-hour format).',
+        });
+      }
+
+      // Check-out must be after check-in
+      if (checkOutDate <= checkInDate) {
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_TIME_RANGE',
+          message: 'Check-out time must be after check-in time.',
+        });
+      }
+
+      // Calculate working hours
+      workingHours = calculateWorkingHours(checkInDate, checkOutDate);
+      
+      // Prevent unreasonable working hours (> 16 hours)
+      if (workingHours > 16) {
+        return res.status(400).json({
+          success: false,
+          code: 'EXCESSIVE_HOURS',
+          message: 'Working hours cannot exceed 16 hours in a single day.',
+        });
+      }
+
+      status = 'checked-out';
+    }
+
+    // ── 7. Create attendance record ───────────────────────────────
+    // Use a dummy location for manual entries (0, 0)
+    const dummyLocation = {
+      type: 'Point',
+      coordinates: [0, 0], // [longitude, latitude]
+    };
+
+    const attendance = await Attendance.create({
+      userId: req.user._id,
+      companyId: req.user.companyId || null,
+      officeLocationId: null,
+      workMode,
+      checkInTime: checkInDate,
+      checkInLocation: dummyLocation,
+      checkOutTime: checkOutDate,
+      checkOutLocation: checkOutDate ? dummyLocation : null,
+      workingHours,
+      date,
+      status,
+      notes: notes || '',
+      wfhCheckoutRadius: 100,
+    });
+
+    // ── Log Activity ─────────────────────────────────────────────
+    await logActivity(
+      req.user._id,
+      'manual-attendance',
+      `Manual Attendance Entry for ${date}`,
+      req.user.companyId
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: `Manual attendance added successfully for ${date}.`,
+      attendance,
+      stats: buildStats(attendance),
+    });
+  } catch (error) {
+    console.error('❌ Manual attendance entry error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════
+// @desc    Update Check-Out Time (for incomplete sessions)
+// @route   PUT /api/attendance/update-checkout
+// @access  Private
+// Body:    { date, checkOutTime }
+// ═════════════════════════════════════════════════════════════════
+const updateCheckOutTime = async (req, res) => {
+  try {
+    const { date, checkOutTime } = req.body;
+
+    // ── 1. Validate required fields ───────────────────────────────
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_DATE',
+        message: 'Date is required.',
+      });
+    }
+
+    if (!checkOutTime) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_CHECKOUT_TIME',
+        message: 'Check-out time is required.',
+      });
+    }
+
+    // ── 2. Validate time format (HH:MM) ──────────────────────────
+    const timeRegex = /^\d{2}:\d{2}$/;
+    if (!timeRegex.test(checkOutTime)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_TIME_FORMAT',
+        message: 'Check-out time must be in HH:MM format (24-hour).',
+      });
+    }
+
+    // ── 3. Find attendance record for the date ────────────────────
+    const attendance = await Attendance.findOne({
+      userId: req.user._id,
+      date: date,
+    });
+
+    if (!attendance) {
+      return res.status(404).json({
+        success: false,
+        code: 'ATTENDANCE_NOT_FOUND',
+        message: 'No attendance record found for this date.',
+      });
+    }
+
+    // ── 4. Check if already checked out ───────────────────────────
+    if (attendance.status === 'checked-out' && attendance.checkOutTime) {
+      return res.status(400).json({
+        success: false,
+        code: 'ALREADY_CHECKED_OUT',
+        message: 'This attendance record is already complete.',
+        attendance,
+      });
+    }
+
+    // ── 5. Parse check-out time ───────────────────────────────────
+    const checkInDate = attendance.checkInTime;
+    const [outHours, outMinutes] = checkOutTime.split(':').map(Number);
+    
+    const checkOutDate = new Date(checkInDate);
+    checkOutDate.setHours(outHours, outMinutes, 0, 0);
+
+    // ── 6. Validate check-out is after check-in ───────────────────
+    if (checkOutDate <= checkInDate) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_TIME_RANGE',
+        message: 'Check-out time must be after check-in time.',
+      });
+    }
+
+    // ── 7. Prevent excessive hours (> 16 hours) ──────────────────
+    const workingHours = calculateWorkingHours(checkInDate, checkOutDate);
+    if (workingHours > 16) {
+      return res.status(400).json({
+        success: false,
+        code: 'EXCESSIVE_HOURS',
+        message: 'Working hours cannot exceed 16 hours in a single day.',
+      });
+    }
+
+    // ── 8. Update attendance record ───────────────────────────────
+    attendance.checkOutTime = checkOutDate;
+    attendance.workingHours = workingHours;
+    attendance.status = 'checked-out';
+    
+    // Set checkOutLocation if it doesn't exist or is null
+    if (!attendance.checkOutLocation) {
+      attendance.checkOutLocation = {
+        type: 'Point',
+        coordinates: [0, 0], // Dummy location for manual updates
+      };
+    }
+
+    await attendance.save();
+
+    // ── Log Activity ─────────────────────────────────────────────
+    await logActivity(
+      req.user._id,
+      'update-checkout',
+      `Updated check-out time for ${date}`,
+      req.user.companyId
+    );
+
+    return res.json({
+      success: true,
+      message: `Check-out time updated successfully. You worked ${formatHours(workingHours)} on ${date}.`,
+      attendance,
+      stats: buildStats(attendance),
+    });
+  } catch (error) {
+    console.error('❌ Update check-out error:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Something went wrong. Please try again.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
 module.exports = {
   checkIn,
   checkOut,
@@ -709,4 +1020,6 @@ module.exports = {
   getAttendanceHistory,
   getOfficeLocation,
   getAttendanceCalendar,
+  manualAttendanceEntry,
+  updateCheckOutTime,
 };

@@ -414,11 +414,7 @@ const getEmployeeBalances = async (req, res) => {
     
     const queryCompanyId = req.user.companyId;
     
-    console.log(`\n📊 ========== GET BALANCES ==========`);
-    console.log(`📊 Target User ID: ${targetUserId}`);
-    console.log(`📊 Year: ${targetYear}`);
-    console.log(`📊 Company ID: ${queryCompanyId}`);
-    console.log(`📊 Requested by: ${req.user.email}`);
+
 
     const yearlyQuery = {
       userId: targetUserId,
@@ -426,13 +422,13 @@ const getEmployeeBalances = async (req, res) => {
       year: targetYear,
     };
 
-    console.log(`📊 Yearly balance query:`, yearlyQuery);
+  
 
     const yearlyBalances = await EmployeeLeaveBalance.find(yearlyQuery)
       .populate('leaveTypeId', 'name')
       .lean();
 
-    console.log(`📊 Yearly balances found:`, yearlyBalances.length);
+   
     if (yearlyBalances.length > 0) {
       console.log(`📊 Sample balance:`, {
         leaveType: yearlyBalances[0].leaveTypeId?.name,
@@ -472,7 +468,7 @@ const getEmployeeBalances = async (req, res) => {
       { $unwind: '$leaveType' },
     ]);
 
-    console.log(`📊 Allocation groups found:`, allocationGroups.length);
+  
 
     const allocationBalances = allocationGroups.map((g) => ({
       _id: `alloc_${g._id}`,
@@ -487,8 +483,7 @@ const getEmployeeBalances = async (req, res) => {
 
     const balances = [...yearlyBalances, ...allocationBalances];
 
-    console.log(`📊 Total balances to return:`, balances.length);
-    console.log(`📊 ====================================\n`);
+
 
     return res.json({ success: true, balances });
   } catch (error) {
