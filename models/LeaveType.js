@@ -21,6 +21,30 @@ const leaveTypeSchema = new mongoose.Schema(
       ref: 'Company',
       required: true,
     },
+    carryForwardEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    maxCarryForwardDays: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    expiryType: {
+      type: String,
+      enum: ['fixed_date', 'financial_year', 'rolling'],
+      default: 'financial_year',
+    },
+    fixedExpiryDate: {
+      type: String,
+      default: '03-31',
+      validate: {
+        validator: function(v) {
+          return !v || /^\d{2}-\d{2}$/.test(v);
+        },
+        message: 'Expiry date must be in MM-DD format (e.g., 03-31)',
+      },
+    },
   },
   {
     timestamps: true,

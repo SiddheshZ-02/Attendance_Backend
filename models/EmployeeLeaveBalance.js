@@ -41,6 +41,23 @@ const employeeLeaveBalanceSchema = new mongoose.Schema(
       ref: 'Company',
       required: true,
     },
+    expiryDate: {
+      type: Date,
+    },
+    isCarriedForward: {
+      type: Boolean,
+      default: false,
+    },
+    carriedForwardFrom: {
+      type: String,
+    },
+    originalGranted: {
+      type: Number,
+    },
+    manuallyAdjusted: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

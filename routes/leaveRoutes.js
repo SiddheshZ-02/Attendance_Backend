@@ -15,7 +15,11 @@ const {
   getGrantStatus,
   allocateIndividualLeave,
   allocateLeave,
-  getEmployeeLeaveCards
+  getEmployeeLeaveCards,
+  configureCarryForward,
+  previewLeaveReset,
+  executeLeaveReset,
+  getResetHistory,
 } = require('../controllers/leaveController');
 const { protect, admin } = require('../middleware/authMiddleware');
 
@@ -39,5 +43,11 @@ router.put('/request/:id/status', protect, admin, updateLeaveStatus);
 router.post('/allocate-individual', protect, admin, allocateIndividualLeave);
 router.post('/allocations', protect, admin, allocateLeave);
 router.get('/employee/:id/leave-cards', protect, admin, getEmployeeLeaveCards);
+
+// ─── Leave Reset & Carry-Forward Routes ──────────────────────────
+router.put('/admin/carry-forward-config/:leaveTypeId', protect, admin, configureCarryForward);
+router.post('/admin/preview-reset', protect, admin, previewLeaveReset);
+router.post('/admin/execute-reset', protect, admin, executeLeaveReset);
+router.get('/admin/reset-history', protect, admin, getResetHistory);
 
 module.exports = router;

@@ -3,6 +3,7 @@ const LeaveRequest = require('../models/LeaveRequest');
 const LeaveType = require('../models/LeaveType');
 const EmployeeLeaveBalance = require('../models/EmployeeLeaveBalance');
 const LeaveAllocation = require('../models/LeaveAllocation');
+const LeaveResetLog = require('../models/LeaveResetLog');
 const User = require('../models/User');
 const { logActivity } = require('../utils/helpers');
 
@@ -858,6 +859,356 @@ const expireLeavesJob = async () => {
   }
 };
 
+// ═════════════════════════════════════════════════════════════════
+// @desc    Configure carry-forward settings for a leave type
+// @route   PUT /api/leave/admin/carry-forward-config/:leaveTypeId
+// @access  Private (Admin)
+// Body:    { carryForwardEnabled, maxCarryForwardDays }
+// ═════════════════════════════════════════════════════════════════
+const configureCarryForward = async (req, res) => {
+  try {
+    const { leaveTypeId } = req.params;
+    const { carryForwardEnabled, maxCarryForwardDays } = req.body;
+
+    if (carryForwardEnabled === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'carryForwardEnabled is required',
+      });
+    }
+
+    if (carryForwardEnabled && (maxCarryForwardDays === undefined || maxCarryForwardDays < 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'maxCarryForwardDays is required when carryForwardEnabled is true',
+      });
+    }
+
+    const leaveType = await LeaveType.findOne({
+      _id: leaveTypeId,
+      companyId: req.user.companyId,
+    });
+
+    if (!leaveType) {
+      return res.status(404).json({
+        success: false,
+        message: 'Leave type not found',
+      });
+    }
+
+    leaveType.carryForwardEnabled = carryForwardEnabled;
+    leaveType.maxCarryForwardDays = carryForwardEnabled ? maxCarryForwardDays : 0;
+    await leaveType.save();
+
+    return res.json({
+      success: true,
+      message: 'Carry-forward configuration updated successfully',
+      leaveType,
+    });
+  } catch (error) {
+    console.error('Configure carry-forward error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error configuring carry-forward settings',
+    });
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════
+// @desc    Preview leave reset impact
+// @route   POST /api/leave/admin/preview-reset
+// @access  Private (Admin)
+// Body:    { resetDate }
+// ═════════════════════════════════════════════════════════════════
+const previewLeaveReset = async (req, res) => {
+  try {
+    const { resetDate } = req.body;
+
+    if (!resetDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'resetDate is required',
+      });
+    }
+
+    const activeLeaveTypes = await LeaveType.find({
+      companyId: req.user.companyId,
+      isActive: true,
+    });
+
+    const employees = await User.find({
+      companyId: req.user.companyId,
+      position: { $ne: 'intern' },
+    }).lean();
+
+    const preview = {
+      resetDate,
+      totalEmployeesAffected: employees.length,
+      leaveTypes: [],
+      summary: {
+        totalLeavesWillCarryForward: 0,
+        totalLeavesWillExpire: 0,
+      },
+    };
+
+    for (const leaveType of activeLeaveTypes) {
+      const balances = await EmployeeLeaveBalance.find({
+        companyId: req.user.companyId,
+        leaveTypeId: leaveType._id,
+        status: 'active',
+      }).lean();
+
+      let totalCarryForward = 0;
+      let totalExpire = 0;
+
+      balances.forEach((balance) => {
+        const remaining = balance.remainingDays;
+        if (leaveType.carryForwardEnabled) {
+          const canCarry = Math.min(remaining, leaveType.maxCarryForwardDays);
+          totalCarryForward += canCarry;
+          totalExpire += remaining - canCarry;
+        } else {
+          totalExpire += remaining;
+        }
+      });
+
+      preview.leaveTypes.push({
+        leaveTypeId: leaveType._id,
+        leaveTypeName: leaveType.name,
+        carryForwardEnabled: leaveType.carryForwardEnabled,
+        maxCarryForwardDays: leaveType.maxCarryForwardDays,
+        employeesWithBalance: balances.length,
+        totalRemainingDays: balances.reduce((sum, b) => sum + b.remainingDays, 0),
+        willCarryForward: totalCarryForward,
+        willExpire: totalExpire,
+      });
+
+      preview.summary.totalLeavesWillCarryForward += totalCarryForward;
+      preview.summary.totalLeavesWillExpire += totalExpire;
+    }
+
+    return res.json({
+      success: true,
+      preview,
+    });
+  } catch (error) {
+    console.error('Preview leave reset error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error generating preview',
+    });
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════
+// @desc    Execute bulk leave reset with carry-forward
+// @route   POST /api/leave/admin/execute-reset
+// @access  Private (Admin)
+// Body:    { resetDate, year }
+// ═════════════════════════════════════════════════════════════════
+const executeLeaveReset = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { resetDate, year } = req.body;
+
+    if (!resetDate || !year) {
+      return res.status(400).json({
+        success: false,
+        message: 'resetDate and year are required',
+      });
+    }
+
+    console.log(`\n🔄 ========== LEAVE RESET STARTED ==========`);
+    console.log(`🔄 Reset Date: ${resetDate}`);
+    console.log(`🔄 New Year: ${year}`);
+    console.log(`🔄 Company: ${req.user.companyId}`);
+
+    const activeLeaveTypes = await LeaveType.find({
+      companyId: req.user.companyId,
+      isActive: true,
+    }).session(session);
+
+    const employees = await User.find({
+      companyId: req.user.companyId,
+      position: { $ne: 'intern' },
+    }).session(session);
+
+    const resetLog = {
+      resetDate: new Date(resetDate),
+      processedBy: req.user._id,
+      companyId: req.user.companyId,
+      totalEmployeesAffected: employees.length,
+      carryForwardPolicy: activeLeaveTypes.map((lt) => ({
+        leaveTypeId: lt._id,
+        leaveTypeName: lt.name,
+        carryForwardEnabled: lt.carryForwardEnabled,
+        maxCarryForwardDays: lt.maxCarryForwardDays,
+      })),
+      details: [],
+      summary: {
+        totalLeavesCarriedForward: 0,
+        totalLeavesExpired: 0,
+        employeesSuccessfullyProcessed: 0,
+        employeesFailed: 0,
+      },
+    };
+
+    let totalCarriedForward = 0;
+    let totalExpired = 0;
+
+    for (const employee of employees) {
+      try {
+        const employeeDetail = {
+          employeeId: employee._id,
+          employeeName: employee.name,
+          leaveTypeBreakdown: [],
+          status: 'success',
+        };
+
+        for (const leaveType of activeLeaveTypes) {
+          const balance = await EmployeeLeaveBalance.findOne({
+            userId: employee._id,
+            leaveTypeId: leaveType._id,
+            status: 'active',
+          }).session(session);
+
+          if (!balance || balance.remainingDays === 0) {
+            continue;
+          }
+
+          const previousBalance = balance.remainingDays;
+          const usedDays = balance.allocatedDays - balance.remainingDays;
+          let carriedForward = 0;
+          let expired = 0;
+
+          if (leaveType.carryForwardEnabled && previousBalance > 0) {
+            carriedForward = Math.min(previousBalance, leaveType.maxCarryForwardDays);
+            expired = previousBalance - carriedForward;
+
+            const expiryDate = new Date(year);
+            const [month, day] = leaveType.fixedExpiryDate.split('-');
+            expiryDate.setMonth(parseInt(month) - 1);
+            expiryDate.setDate(parseInt(day));
+
+            await EmployeeLeaveBalance.updateOne(
+              { _id: balance._id },
+              {
+                $set: {
+                  remainingDays: carriedForward,
+                  isCarriedForward: true,
+                  carriedForwardFrom: balance.year,
+                  expiryDate: expiryDate,
+                },
+              }
+            ).session(session);
+          } else {
+            expired = previousBalance;
+            await EmployeeLeaveBalance.updateOne(
+              { _id: balance._id },
+              { $set: { status: 'expired', remainingDays: 0 } }
+            ).session(session);
+          }
+
+          employeeDetail.leaveTypeBreakdown.push({
+            leaveTypeId: leaveType._id,
+            leaveTypeName: leaveType.name,
+            previousBalance,
+            usedDays,
+            carriedForward,
+            expired,
+            newBalance: carriedForward,
+          });
+
+          totalCarriedForward += carriedForward;
+          totalExpired += expired;
+        }
+
+        resetLog.details.push(employeeDetail);
+        resetLog.summary.employeesSuccessfullyProcessed++;
+      } catch (empError) {
+        console.error(`❌ Error processing employee ${employee.name}:`, empError);
+        resetLog.details.push({
+          employeeId: employee._id,
+          employeeName: employee.name,
+          status: 'failed',
+          error: empError.message,
+        });
+        resetLog.summary.employeesFailed++;
+      }
+    }
+
+    resetLog.summary.totalLeavesCarriedForward = totalCarriedForward;
+    resetLog.summary.totalLeavesExpired = totalExpired;
+    resetLog.status = resetLog.summary.employeesFailed > 0 ? 'partial' : 'completed';
+
+    await LeaveResetLog.create([resetLog], { session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    console.log(`\n✅ ========== LEAVE RESET COMPLETED ==========`);
+    console.log(`✅ Employees Processed: ${resetLog.summary.employeesSuccessfullyProcessed}`);
+    console.log(`✅ Employees Failed: ${resetLog.summary.employeesFailed}`);
+    console.log(`✅ Leaves Carried Forward: ${totalCarriedForward}`);
+    console.log(`✅ Leaves Expired: ${totalExpired}`);
+
+    return res.json({
+      success: true,
+      message: `Leave reset completed successfully. ${totalCarriedForward} days carried forward, ${totalExpired} days expired.`,
+      summary: resetLog.summary,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+
+    console.error('❌ Execute leave reset error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error executing leave reset',
+    });
+  }
+};
+
+// ═════════════════════════════════════════════════════════════════
+// @desc    Get leave reset history
+// @route   GET /api/leave/admin/reset-history
+// @access  Private (Admin)
+// ═════════════════════════════════════════════════════════════════
+const getResetHistory = async (req, res) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+
+    const resets = await LeaveResetLog.find({
+      companyId: req.user.companyId,
+    })
+      .populate('processedBy', 'name email')
+      .sort({ resetDate: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .lean();
+
+    const total = await LeaveResetLog.countDocuments({
+      companyId: req.user.companyId,
+    });
+
+    return res.json({
+      success: true,
+      resets,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+    });
+  } catch (error) {
+    console.error('Get reset history error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching reset history',
+    });
+  }
+};
+
 module.exports = {
   submitLeaveRequest,
   getMyLeaveRequests,
@@ -875,4 +1226,8 @@ module.exports = {
   allocateLeave,
   getEmployeeLeaveCards,
   expireLeavesJob,
+  configureCarryForward,
+  previewLeaveReset,
+  executeLeaveReset,
+  getResetHistory,
 };
