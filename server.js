@@ -11,6 +11,8 @@ const ownerRoutes = require('./routes/ownerRoutes');
 const activityRoutes = require('./routes/activityRoutes');
 const holidayRoutes = require('./routes/holidayRoutes');
 
+const { expireLeavesJob } = require('./controllers/leaveController');
+
 // Initialize express app
 const app = express();
 
@@ -30,7 +32,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/attendance', attendanceRoutes);
-app.use('/api/leave', leaveRoutes); // Changed back to /api/leave
+app.use('/api/leave', leaveRoutes); 
 app.use('/api/holidays', holidayRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/owner', ownerRoutes);
@@ -76,4 +78,8 @@ const PORT = process.env.PORT || 8001;
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
+  
+  // Start the expiry job (runs once on startup, then every 24 hours)
+  expireLeavesJob();
+  setInterval(expireLeavesJob, 24 * 60 * 60 * 1000);
 });

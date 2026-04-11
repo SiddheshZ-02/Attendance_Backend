@@ -1,6 +1,8 @@
+const mongoose = require('mongoose');
 const LeaveRequest = require('../models/LeaveRequest');
 const LeaveType = require('../models/LeaveType');
 const EmployeeLeaveBalance = require('../models/EmployeeLeaveBalance');
+const LeaveAllocation = require('../models/LeaveAllocation');
 const User = require('../models/User');
 const { logActivity } = require('../utils/helpers');
 
@@ -49,12 +51,37 @@ const submitLeaveRequest = async (req, res) => {
     const currentYear = start.getFullYear().toString();
 
     if (payType === 'paid') {
+      // 1. Check yearly EmployeeLeaveBalance
       const balance = await EmployeeLeaveBalance.findOne({ userId: req.user._id, leaveTypeId, year: currentYear });
-      if (!balance || balance.remainingDays < totalDays) {
+      const yearlyRemaining = balance ? balance.remainingDays : 0;
+
+      // 2. Check active non-expired LeaveAllocation (allocation-based grants from admin)
+      const now = new Date();
+      const activeAllocations = await LeaveAllocation.aggregate([
+        {
+          $match: {
+            userId: req.user._id,
+            leaveTypeId: new mongoose.Types.ObjectId(leaveTypeId),
+            status: 'active',
+            expiresAt: { $gt: now },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            totalAvailable: { $sum: { $subtract: ['$daysAllocated', '$daysUsed'] } },
+          },
+        },
+      ]);
+      const allocationRemaining = activeAllocations.length > 0 ? activeAllocations[0].totalAvailable : 0;
+
+      const totalAvailable = yearlyRemaining + allocationRemaining;
+
+      if (totalAvailable < totalDays) {
         return res.status(400).json({
           success: false,
           code: 'INSUFFICIENT_BALANCE',
-          message: `Insufficient leave balance. Available: ${balance ? balance.remainingDays : 0} days.`
+          message: `Insufficient leave balance. Available: ${totalAvailable} days (yearly: ${yearlyRemaining}, allocated: ${allocationRemaining}).`
         });
       }
     }
@@ -232,47 +259,137 @@ const deleteLeaveType = async (req, res) => {
 const grantYearlyLeaves = async (req, res) => {
   try {
     const { year, employeeIds } = req.body;
+
+    if (!year || !employeeIds || !Array.isArray(employeeIds) || employeeIds.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid request. year and employeeIds array are required.' 
+      });
+    }
+
     const activeTypes = await LeaveType.find({ companyId: req.user.companyId, isActive: true });
+    
+    if (activeTypes.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'No active leave types found. Please create leave types first.' 
+      });
+    }
+
+    console.log(`\n🎯 ========== GRANT YEARLY LEAVES ==========`);
+    console.log(`🎯 Year: ${year}`);
+    console.log(`🎯 Employees: ${employeeIds.length}`);
+    console.log(`📋 Active leave types:`, activeTypes.map(t => `${t.name} (${t.yearlyCount} days)`));
+    console.log(`🏢 Company ID: ${req.user.companyId}`);
+    console.log(`👤 Admin: ${req.user.email}`);
 
     let grantedCount = 0;
     let skippedCount = 0;
+    const processedEmployees = [];
+    const failedEmployees = [];
 
     for (const empId of employeeIds) {
-      const prevYear = (parseInt(year) - 1).toString();
-      await EmployeeLeaveBalance.updateMany(
-        { userId: empId, year: prevYear, status: 'active' },
-        { status: 'expired' }
-      );
+      try {
+        const empResult = {
+          employeeId: empId,
+          grantedTypes: [],
+          skippedTypes: [],
+          error: null
+        };
 
-      for (const type of activeTypes) {
-        const exists = await EmployeeLeaveBalance.findOne({
-          userId: empId,
-          leaveTypeId: type._id,
-          year,
-          status: 'active',
-        });
+        console.log(`\n👤 Processing employee: ${empId}`);
 
-        if (exists) {
-          skippedCount++;
-          continue;
+        const prevYear = (parseInt(year) - 1).toString();
+        const expiredResult = await EmployeeLeaveBalance.updateMany(
+          { userId: empId, year: prevYear, status: 'active', companyId: req.user.companyId },
+          { status: 'expired' }
+        );
+        
+        if (expiredResult.modifiedCount > 0) {
+          console.log(`   ⏰ Expired ${expiredResult.modifiedCount} balances from ${prevYear}`);
         }
 
-        await EmployeeLeaveBalance.create({
-          userId: empId,
-          leaveTypeId: type._id,
-          year,
-          allocatedDays: type.yearlyCount,
-          remainingDays: type.yearlyCount,
-          companyId: req.user.companyId,
+        for (const type of activeTypes) {
+          console.log(`   📝 Checking ${type.name}...`);
+          
+          const existingBalance = await EmployeeLeaveBalance.findOne({
+            userId: empId,
+            leaveTypeId: type._id,
+            year,
+            companyId: req.user.companyId,
+          });
+
+          if (existingBalance) {
+            skippedCount++;
+            empResult.skippedTypes.push(type.name);
+            console.log(`   ⏭️  Skipped - Already exists (status: ${existingBalance.status})`);
+            continue;
+          }
+
+          console.log(`   ✅ Creating new balance for ${type.name}...`);
+          
+          const newBalance = await EmployeeLeaveBalance.create({
+            userId: empId,
+            leaveTypeId: type._id,
+            year,
+            allocatedDays: type.yearlyCount,
+            remainingDays: type.yearlyCount,
+            companyId: req.user.companyId,
+            status: 'active',
+          });
+          
+          console.log(`   ✅ Created: ${newBalance.allocatedDays} days allocated, ${newBalance.remainingDays} remaining`);
+          
+          grantedCount++;
+          empResult.grantedTypes.push(type.name);
+        }
+
+        processedEmployees.push(empResult);
+        console.log(`   ✅ Employee ${empId} completed: ${empResult.grantedTypes.length} granted, ${empResult.skippedTypes.length} skipped`);
+      } catch (empError) {
+        console.error(`\n❌ ERROR processing employee ${empId}:`, {
+          message: empError.message,
+          code: empError.code,
+          name: empError.name
         });
-        grantedCount++;
+        
+        failedEmployees.push({
+          employeeId: empId,
+          error: empError.message || 'Unknown error',
+          errorCode: empError.code,
+        });
       }
     }
 
-    return res.json({
+    const result = {
       success: true,
-      message: `Granted ${grantedCount} balances, skipped ${skippedCount}.`,
-    });
+      message: `Processed ${employeeIds.length} employee(s)`,
+      grantedCount,
+      skippedCount,
+      processedCount: processedEmployees.length,
+      failedCount: failedEmployees.length,
+      details: {
+        processed: processedEmployees,
+        failed: failedEmployees
+      }
+    };
+
+    if (failedEmployees.length > 0) {
+      result.partialSuccess = true;
+      result.message = `Granted ${grantedCount} balances to ${processedEmployees.length} employee(s), failed ${failedEmployees.length}`;
+    }
+
+    console.log(`\n🎉 ========== GRANT COMPLETED ==========`);
+    console.log(`🎉 Granted: ${grantedCount}`);
+    console.log(`⏭️  Skipped: ${skippedCount}`);
+    console.log(`✅ Processed: ${processedEmployees.length}`);
+    console.log(`❌ Failed: ${failedEmployees.length}`);
+    if (failedEmployees.length > 0) {
+      console.log(`❌ Failed employees:`, failedEmployees);
+    }
+    console.log(`🎯 ======================================\n`);
+
+    return res.json(result);
   } catch (error) {
     console.error('❌ Grant yearly leaves error:', error);
     return res.status(500).json({ success: false, message: 'Error granting leaves' });
@@ -282,13 +399,99 @@ const grantYearlyLeaves = async (req, res) => {
 const getEmployeeBalances = async (req, res) => {
   try {
     const { userId, year } = req.query;
-    const balances = await EmployeeLeaveBalance.find({
-      userId: userId || req.user._id,
-      year: year || new Date().getFullYear().toString(),
-    }).populate('leaveTypeId', 'name');
+    const targetUserId = userId || req.user._id;
+    
+    if (!year) {
+      const today = new Date();
+      const currentMonth = today.getMonth();
+      const currentYear = today.getFullYear();
+      const financialYearStart = currentMonth < 3 ? currentYear - 1 : currentYear;
+      var targetYear = `${financialYearStart}-${financialYearStart + 1}`;
+    } else {
+      var targetYear = year;
+    }
+    
+    const queryCompanyId = req.user.companyId;
+    
+    console.log(`\n📊 ========== GET BALANCES ==========`);
+    console.log(`📊 Target User ID: ${targetUserId}`);
+    console.log(`📊 Year: ${targetYear}`);
+    console.log(`📊 Company ID: ${queryCompanyId}`);
+    console.log(`📊 Requested by: ${req.user.email}`);
+
+    const yearlyQuery = {
+      userId: targetUserId,
+      companyId: queryCompanyId,
+      year: targetYear,
+    };
+
+    console.log(`📊 Yearly balance query:`, yearlyQuery);
+
+    const yearlyBalances = await EmployeeLeaveBalance.find(yearlyQuery)
+      .populate('leaveTypeId', 'name')
+      .lean();
+
+    console.log(`📊 Yearly balances found:`, yearlyBalances.length);
+    if (yearlyBalances.length > 0) {
+      console.log(`📊 Sample balance:`, {
+        leaveType: yearlyBalances[0].leaveTypeId?.name,
+        allocatedDays: yearlyBalances[0].allocatedDays,
+        remainingDays: yearlyBalances[0].remainingDays,
+        year: yearlyBalances[0].year,
+        status: yearlyBalances[0].status,
+      });
+    }
+
+    const now = new Date();
+    const allocationGroups = await LeaveAllocation.aggregate([
+      {
+        $match: {
+          userId: new mongoose.Types.ObjectId(targetUserId),
+          companyId: queryCompanyId,
+          status: 'active',
+          expiresAt: { $gt: now },
+        },
+      },
+      {
+        $group: {
+          _id: '$leaveTypeId',
+          totalAllocated: { $sum: '$daysAllocated' },
+          totalUsed: { $sum: '$daysUsed' },
+          earliestExpiry: { $min: '$expiresAt' },
+        },
+      },
+      {
+        $lookup: {
+          from: 'leavetypes',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'leaveType',
+        },
+      },
+      { $unwind: '$leaveType' },
+    ]);
+
+    console.log(`📊 Allocation groups found:`, allocationGroups.length);
+
+    const allocationBalances = allocationGroups.map((g) => ({
+      _id: `alloc_${g._id}`,
+      leaveTypeId: { _id: g._id, name: g.leaveType.name },
+      allocatedDays: g.totalAllocated,
+      usedDays: g.totalUsed,
+      remainingDays: g.totalAllocated - g.totalUsed,
+      expiresAt: g.earliestExpiryDate,
+      year: 'Allocation-based',
+      isAllocationBased: true,
+    }));
+
+    const balances = [...yearlyBalances, ...allocationBalances];
+
+    console.log(`📊 Total balances to return:`, balances.length);
+    console.log(`📊 ====================================\n`);
 
     return res.json({ success: true, balances });
   } catch (error) {
+    console.error('Get employee balances error:', error);
     return res.status(500).json({ success: false, message: 'Error fetching balances' });
   }
 };
@@ -355,18 +558,51 @@ const updateLeaveStatus = async (req, res) => {
     }
 
     if (status === 'approved' && leaveRequest.payType === 'paid') {
-      const year = new Date(leaveRequest.startDate).getFullYear().toString();
-      const balance = await EmployeeLeaveBalance.findOne({
+      // 1. Try to consume from LeaveAllocation (FIFO)
+      const allocations = await LeaveAllocation.find({
         userId: leaveRequest.userId,
         leaveTypeId: leaveRequest.leaveTypeId,
-        year: year,
-      });
+        status: 'active',
+        expiresAt: { $gt: new Date() },
+      }).sort({ expiresAt: 1 });
 
-      if (balance && balance.remainingDays >= leaveRequest.totalDays) {
-        balance.remainingDays -= leaveRequest.totalDays;
-        await balance.save();
-      } else {
-        return res.status(400).json({ success: false, message: 'Insufficient balance to approve' });
+      let remainingToDeduct = leaveRequest.totalDays;
+
+      if (allocations.length > 0) {
+        for (const allocation of allocations) {
+          if (remainingToDeduct <= 0) break;
+
+          const availableInAllocation = allocation.daysAllocated - allocation.daysUsed;
+          const toDeduct = Math.min(availableInAllocation, remainingToDeduct);
+
+          allocation.daysUsed += toDeduct;
+          remainingToDeduct -= toDeduct;
+
+          if (allocation.daysUsed >= allocation.daysAllocated) {
+            allocation.status = 'consumed';
+          }
+          await allocation.save();
+        }
+      }
+
+      // 2. If still remaining, try to consume from yearly balance (legacy/yearly)
+      if (remainingToDeduct > 0) {
+        const year = new Date(leaveRequest.startDate).getFullYear().toString();
+        const balance = await EmployeeLeaveBalance.findOne({
+          userId: leaveRequest.userId,
+          leaveTypeId: leaveRequest.leaveTypeId,
+          year: year,
+        });
+
+        if (balance && balance.remainingDays >= remainingToDeduct) {
+          balance.remainingDays -= remainingToDeduct;
+          await balance.save();
+          remainingToDeduct = 0;
+        }
+      }
+
+      if (remainingToDeduct > 0) {
+        return res.status(400).json({ success: false, message: 'Insufficient leave balance to approve' });
       }
     }
 
@@ -399,18 +635,226 @@ const getGrantStatus = async (req, res) => {
     const balances = await EmployeeLeaveBalance.find({
       year,
       companyId: req.user.companyId,
-    }).distinct('userId');
+      status: 'active'
+    }).lean();
 
-    // Return a map of userId -> granted (true)
     const grantMap = {};
-    balances.forEach(id => {
-      grantMap[id.toString()] = true;
+    const employeeLeaveCounts = {};
+
+    balances.forEach(balance => {
+      const userId = balance.userId.toString();
+      if (!employeeLeaveCounts[userId]) {
+        employeeLeaveCounts[userId] = 0;
+      }
+      employeeLeaveCounts[userId]++;
+      
+      if (!grantMap[userId]) {
+        grantMap[userId] = true;
+      }
     });
 
-    return res.json({ success: true, grantMap });
+    return res.json({ 
+      success: true, 
+      grantMap,
+      employeeLeaveCounts
+    });
   } catch (error) {
     console.error('Get grant status error:', error);
     return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+const allocateIndividualLeave = async (req, res) => {
+  try {
+    const { userId, leaveTypeId, allocatedDays, validityDays } = req.body;
+
+    if (!userId || !leaveTypeId || allocatedDays === undefined) {
+      return res.status(400).json({ success: false, message: 'Missing required fields (userId, leaveTypeId, allocatedDays)' });
+    }
+
+    const days = Number(allocatedDays);
+    if (isNaN(days) || days <= 0) {
+      return res.status(400).json({ success: false, message: 'allocatedDays must be a positive number' });
+    }
+
+    const ALLOWED_VALIDITY = [7, 15, 30, 45];
+    const rawValidity = validityDays !== undefined ? Number(validityDays) : days;
+    const validity = ALLOWED_VALIDITY.includes(rawValidity) ? rawValidity : rawValidity > 0 ? rawValidity : days;
+
+    const leaveType = await LeaveType.findById(leaveTypeId);
+    if (!leaveType) {
+      return res.status(404).json({ success: false, message: 'Leave type not found' });
+    }
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + validity);
+
+    // Check if there's an existing active allocation for this user and leave type
+    const now = new Date();
+    const existingAllocation = await LeaveAllocation.findOne({
+      userId,
+      leaveTypeId,
+      status: 'active',
+      expiresAt: { $gt: now },
+    });
+
+    let allocation;
+    
+    if (existingAllocation) {
+      // Add days to existing allocation and update expiry
+      existingAllocation.daysAllocated += days;
+      existingAllocation.expiresAt = expiresAt;
+      await existingAllocation.save();
+      allocation = existingAllocation;
+    } else {
+      // Create new allocation if none exists
+      allocation = await LeaveAllocation.create({
+        userId,
+        leaveTypeId,
+        companyId: req.user.companyId,
+        daysAllocated: days,
+        expiresAt,
+        createdBy: req.user._id,
+        status: 'active',
+      });
+    }
+
+    await logActivity(
+      userId,
+      'leave-allocated',
+      `Allocated ${days} days of ${leaveType.name} (expires on ${expiresAt.toDateString()})`,
+      req.user.companyId
+    );
+
+    return res.json({
+      success: true,
+      message: `Successfully allocated ${days} days of ${leaveType.name}. Expires on ${expiresAt.toDateString()}.`,
+      allocation,
+      expiryDate: expiresAt,
+    });
+  } catch (error) {
+    console.error('Allocate individual leave error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+const allocateLeave = async (req, res) => {
+  try {
+    const { userId, leaveTypeId, days } = req.body;
+
+    if (!userId || !leaveTypeId || !days) {
+      return res.status(400).json({ success: false, message: 'Required fields missing' });
+    }
+
+    const leaveType = await LeaveType.findById(leaveTypeId);
+    if (!leaveType) {
+      return res.status(404).json({ success: false, message: 'Leave type not found' });
+    }
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 40); // 40 days validity
+
+    const allocation = await LeaveAllocation.create({
+      userId,
+      leaveTypeId,
+      companyId: req.user.companyId,
+      daysAllocated: Number(days),
+      expiresAt,
+      createdBy: req.user._id,
+    });
+
+    await logActivity(
+      userId,
+      'leave-allocated',
+      `Allocated ${days} days of ${leaveType.name} (standalone)`,
+      req.user.companyId
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: `Allocated ${days} days of ${leaveType.name}.`,
+      allocation,
+      expiryDate: expiresAt,
+    });
+  } catch (error) {
+    console.error('Allocate leave error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+const getEmployeeLeaveCards = async (req, res) => {
+  try {
+    let userId = req.params.id;
+    if (!userId || userId === 'me') {
+      userId = req.user._id;
+    }
+    const now = new Date();
+
+    // Group by leave type
+    const leaveGroups = await LeaveAllocation.aggregate([
+      {
+        $match: {
+          userId: new mongoose.Types.ObjectId(userId),
+          status: 'active',
+          expiresAt: { $gt: now },
+        },
+      },
+      {
+        $group: {
+          _id: '$leaveTypeId',
+          totalAllocated: { $sum: '$daysAllocated' },
+          totalUsed: { $sum: '$daysUsed' },
+          earliestExpiry: { $min: '$expiresAt' },
+        },
+      },
+      {
+        $lookup: {
+          from: 'leavetypes',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'leaveType',
+        },
+      },
+      { $unwind: '$leaveType' },
+      { $sort: { earliestExpiry: 1 } },
+    ]);
+
+    const cards = leaveGroups.map((lt) => {
+      const availableDays = lt.totalAllocated - lt.totalUsed;
+      const expires_in_days = Math.max(0, Math.ceil((lt.earliestExpiry - now) / (1000 * 60 * 60 * 24)));
+      return {
+        leave_type_id: lt._id,
+        leave_type_name: lt.leaveType.name,
+        available_days: availableDays,
+        total_days: lt.totalAllocated,
+        used_days: lt.totalUsed,
+        expires_in_days,
+        expiry_date: lt.earliestExpiry,
+      };
+    }).filter(card => card.available_days > 0);
+
+    return res.json({ success: true, leaveCards: cards });
+  } catch (error) {
+    console.error('Get leave cards error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+const expireLeavesJob = async () => {
+  try {
+    const now = new Date();
+    const result = await LeaveAllocation.updateMany(
+      {
+        status: 'active',
+        expiresAt: { $lte: now },
+      },
+      {
+        $set: { status: 'expired' },
+      }
+    );
+    console.log(`[Expiry Job] Expired ${result.modifiedCount} allocations at ${now.toISOString()}`);
+  } catch (error) {
+    console.error('[Expiry Job] Error:', error);
   }
 };
 
@@ -427,4 +871,8 @@ module.exports = {
   getAllLeaveRequests,
   updateLeaveStatus,
   getGrantStatus,
+  allocateIndividualLeave,
+  allocateLeave,
+  getEmployeeLeaveCards,
+  expireLeavesJob,
 };

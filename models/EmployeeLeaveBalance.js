@@ -47,7 +47,7 @@ const employeeLeaveBalanceSchema = new mongoose.Schema(
   }
 );
 
-employeeLeaveBalanceSchema.index({ userId: 1, leaveTypeId: 1, year: 1 }, { unique: true });
+employeeLeaveBalanceSchema.index({ userId: 1, leaveTypeId: 1, year: 1, companyId: 1 }, { unique: true });
 employeeLeaveBalanceSchema.index({ companyId: 1, userId: 1 });
 
 module.exports = mongoose.model('EmployeeLeaveBalance', employeeLeaveBalanceSchema);

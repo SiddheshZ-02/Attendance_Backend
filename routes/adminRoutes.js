@@ -35,6 +35,7 @@ const {
   updateHoliday,
   deleteHoliday,
 } = require('../controllers/holidayController');
+const { allocateIndividualLeave } = require('../controllers/leaveController');
 const { protect, admin } = require('../middleware/authMiddleware');
 
 // ─── Holiday Routes (Moved to top) ────────────────────────────────
