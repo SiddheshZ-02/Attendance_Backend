@@ -122,7 +122,6 @@ const submitLeaveRequest = async (req, res) => {
     return res.status(201).json({ success: true, message: 'Leave request submitted successfully.', leaveRequest });
 
   } catch (error) {
-    console.error('❌ Submit leave request error:', error);
     return res.status(500).json({ success: false, code: 'SERVER_ERROR', message: 'Something went wrong.' });
   }
 };
@@ -252,7 +251,6 @@ const deleteLeaveType = async (req, res) => {
     await LeaveType.findByIdAndDelete(id);
     return res.json({ success: true, message: 'Leave type deleted successfully' });
   } catch (error) {
-    console.error('Delete leave type error:', error);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
@@ -277,15 +275,9 @@ const grantYearlyLeaves = async (req, res) => {
       });
     }
 
-    console.log(`\n🎯 ========== GRANT YEARLY LEAVES ==========`);
-    console.log(`🎯 Year: ${year}`);
-    console.log(`🎯 Employees: ${employeeIds.length}`);
-    console.log(`📋 Active leave types:`, activeTypes.map(t => `${t.name} (${t.yearlyCount} days)`));
-    console.log(`🏢 Company ID: ${req.user.companyId}`);
-    console.log(`👤 Admin: ${req.user.email}`);
-
     let grantedCount = 0;
     let skippedCount = 0;
+    let updatedCount = 0;
     const processedEmployees = [];
     const failedEmployees = [];
 
@@ -294,11 +286,10 @@ const grantYearlyLeaves = async (req, res) => {
         const empResult = {
           employeeId: empId,
           grantedTypes: [],
+          updatedTypes: [],
           skippedTypes: [],
           error: null
         };
-
-        console.log(`\n👤 Processing employee: ${empId}`);
 
         const prevYear = (parseInt(year) - 1).toString();
         const expiredResult = await EmployeeLeaveBalance.updateMany(
@@ -307,12 +298,10 @@ const grantYearlyLeaves = async (req, res) => {
         );
         
         if (expiredResult.modifiedCount > 0) {
-          console.log(`   ⏰ Expired ${expiredResult.modifiedCount} balances from ${prevYear}`);
+          // Expired previous year balances
         }
 
         for (const type of activeTypes) {
-          console.log(`   📝 Checking ${type.name}...`);
-          
           const existingBalance = await EmployeeLeaveBalance.findOne({
             userId: empId,
             leaveTypeId: type._id,
@@ -321,14 +310,39 @@ const grantYearlyLeaves = async (req, res) => {
           });
 
           if (existingBalance) {
-            skippedCount++;
-            empResult.skippedTypes.push(type.name);
-            console.log(`   ⏭️  Skipped - Already exists (status: ${existingBalance.status})`);
+            if (existingBalance.status === 'expired') {
+              // Preserve carry-forward data if it exists
+              const wasCarriedForward = existingBalance.isCarriedForward;
+              const carriedForwardFrom = existingBalance.carriedForwardFrom;
+              
+              existingBalance.status = 'active';
+              existingBalance.allocatedDays = type.yearlyCount;
+              existingBalance.usedDays = 0;
+              existingBalance.remainingDays = type.yearlyCount;
+              
+              // IMPORTANT: Preserve carry-forward metadata instead of overwriting
+              if (wasCarriedForward) {
+                existingBalance.isCarriedForward = true;
+                existingBalance.carriedForwardFrom = carriedForwardFrom;
+                existingBalance.remainingDays = type.yearlyCount;
+              } else {
+                existingBalance.isCarriedForward = false;
+                existingBalance.carriedForwardFrom = undefined;
+              }
+              
+              existingBalance.originalGranted = type.yearlyCount;
+              existingBalance.manuallyAdjusted = 0;
+              await existingBalance.save();
+              
+              updatedCount++;
+              empResult.updatedTypes.push(type.name);
+            } else {
+              skippedCount++;
+              empResult.skippedTypes.push(type.name);
+            }
             continue;
           }
 
-          console.log(`   ✅ Creating new balance for ${type.name}...`);
-          
           const newBalance = await EmployeeLeaveBalance.create({
             userId: empId,
             leaveTypeId: type._id,
@@ -337,23 +351,16 @@ const grantYearlyLeaves = async (req, res) => {
             remainingDays: type.yearlyCount,
             companyId: req.user.companyId,
             status: 'active',
+            originalGranted: type.yearlyCount,
+            isCarriedForward: false,
           });
-          
-          console.log(`   ✅ Created: ${newBalance.allocatedDays} days allocated, ${newBalance.remainingDays} remaining`);
           
           grantedCount++;
           empResult.grantedTypes.push(type.name);
         }
 
         processedEmployees.push(empResult);
-        console.log(`   ✅ Employee ${empId} completed: ${empResult.grantedTypes.length} granted, ${empResult.skippedTypes.length} skipped`);
       } catch (empError) {
-        console.error(`\n❌ ERROR processing employee ${empId}:`, {
-          message: empError.message,
-          code: empError.code,
-          name: empError.name
-        });
-        
         failedEmployees.push({
           employeeId: empId,
           error: empError.message || 'Unknown error',
@@ -366,6 +373,7 @@ const grantYearlyLeaves = async (req, res) => {
       success: true,
       message: `Processed ${employeeIds.length} employee(s)`,
       grantedCount,
+      updatedCount,
       skippedCount,
       processedCount: processedEmployees.length,
       failedCount: failedEmployees.length,
@@ -377,22 +385,11 @@ const grantYearlyLeaves = async (req, res) => {
 
     if (failedEmployees.length > 0) {
       result.partialSuccess = true;
-      result.message = `Granted ${grantedCount} balances to ${processedEmployees.length} employee(s), failed ${failedEmployees.length}`;
+      result.message = `Granted ${grantedCount} balances, updated ${updatedCount} balances for ${processedEmployees.length} employee(s), failed ${failedEmployees.length}`;
     }
-
-    console.log(`\n🎉 ========== GRANT COMPLETED ==========`);
-    console.log(`🎉 Granted: ${grantedCount}`);
-    console.log(`⏭️  Skipped: ${skippedCount}`);
-    console.log(`✅ Processed: ${processedEmployees.length}`);
-    console.log(`❌ Failed: ${failedEmployees.length}`);
-    if (failedEmployees.length > 0) {
-      console.log(`❌ Failed employees:`, failedEmployees);
-    }
-    console.log(`🎯 ======================================\n`);
 
     return res.json(result);
   } catch (error) {
-    console.error('❌ Grant yearly leaves error:', error);
     return res.status(500).json({ success: false, message: 'Error granting leaves' });
   }
 };
@@ -428,16 +425,8 @@ const getEmployeeBalances = async (req, res) => {
       .populate('leaveTypeId', 'name')
       .lean();
 
-   
-    if (yearlyBalances.length > 0) {
-      console.log(`📊 Sample balance:`, {
-        leaveType: yearlyBalances[0].leaveTypeId?.name,
-        allocatedDays: yearlyBalances[0].allocatedDays,
-        remainingDays: yearlyBalances[0].remainingDays,
-        year: yearlyBalances[0].year,
-        status: yearlyBalances[0].status,
-      });
-    }
+
+
 
     const now = new Date();
     const allocationGroups = await LeaveAllocation.aggregate([
@@ -487,7 +476,6 @@ const getEmployeeBalances = async (req, res) => {
 
     return res.json({ success: true, balances });
   } catch (error) {
-    console.error('Get employee balances error:', error);
     return res.status(500).json({ success: false, message: 'Error fetching balances' });
   }
 };
@@ -528,7 +516,6 @@ const getAllLeaveRequests = async (req, res) => {
       limit: parseInt(limit) 
     });
   } catch (error) {
-    console.error('Get all leave requests error:', error);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
@@ -616,7 +603,6 @@ const updateLeaveStatus = async (req, res) => {
 
     return res.json({ success: true, message: `Leave ${status}` });
   } catch (error) {
-    console.error('Update leave status error:', error);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
@@ -655,7 +641,6 @@ const getGrantStatus = async (req, res) => {
       employeeLeaveCounts
     });
   } catch (error) {
-    console.error('Get grant status error:', error);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
@@ -729,7 +714,6 @@ const allocateIndividualLeave = async (req, res) => {
       expiryDate: expiresAt,
     });
   } catch (error) {
-    console.error('Allocate individual leave error:', error);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
@@ -773,7 +757,6 @@ const allocateLeave = async (req, res) => {
       expiryDate: expiresAt,
     });
   } catch (error) {
-    console.error('Allocate leave error:', error);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
@@ -831,7 +814,6 @@ const getEmployeeLeaveCards = async (req, res) => {
 
     return res.json({ success: true, leaveCards: cards });
   } catch (error) {
-    console.error('Get leave cards error:', error);
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
@@ -848,9 +830,8 @@ const expireLeavesJob = async () => {
         $set: { status: 'expired' },
       }
     );
-    console.log(`[Expiry Job] Expired ${result.modifiedCount} allocations at ${now.toISOString()}`);
   } catch (error) {
-    console.error('[Expiry Job] Error:', error);
+    // Expiry job error - will retry next cycle
   }
 };
 
@@ -901,7 +882,6 @@ const configureCarryForward = async (req, res) => {
       leaveType,
     });
   } catch (error) {
-    console.error('Configure carry-forward error:', error);
     return res.status(500).json({
       success: false,
       message: 'Error configuring carry-forward settings',
@@ -987,7 +967,6 @@ const previewLeaveReset = async (req, res) => {
       preview,
     });
   } catch (error) {
-    console.error('Preview leave reset error:', error);
     return res.status(500).json({
       success: false,
       message: 'Error generating preview',
@@ -1006,7 +985,7 @@ const executeLeaveReset = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { resetDate, year } = req.body;
+    const { resetDate, year, autoGrantNewYear = false } = req.body;
 
     if (!resetDate || !year) {
       return res.status(400).json({
@@ -1015,23 +994,44 @@ const executeLeaveReset = async (req, res) => {
       });
     }
 
-    console.log(`\n🔄 ========== LEAVE RESET STARTED ==========`);
-    console.log(`🔄 Reset Date: ${resetDate}`);
-    console.log(`🔄 New Year: ${year}`);
-    console.log(`🔄 Company: ${req.user.companyId}`);
+    const resetDateObj = new Date(resetDate);
+    if (isNaN(resetDateObj.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid resetDate format',
+      });
+    }
 
     const activeLeaveTypes = await LeaveType.find({
       companyId: req.user.companyId,
       isActive: true,
     }).session(session);
 
+    if (activeLeaveTypes.length === 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: 'No active leave types found. Please create leave types first.',
+      });
+    }
+
     const employees = await User.find({
       companyId: req.user.companyId,
       position: { $ne: 'intern' },
     }).session(session);
 
+    if (employees.length === 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({
+        success: false,
+        message: 'No employees found to process',
+      });
+    }
+
     const resetLog = {
-      resetDate: new Date(resetDate),
+      resetDate: resetDateObj,
       processedBy: req.user._id,
       companyId: req.user.companyId,
       totalEmployeesAffected: employees.length,
@@ -1052,6 +1052,7 @@ const executeLeaveReset = async (req, res) => {
 
     let totalCarriedForward = 0;
     let totalExpired = 0;
+    let totalEmployeesProcessed = 0;
 
     for (const employee of employees) {
       try {
@@ -1061,6 +1062,8 @@ const executeLeaveReset = async (req, res) => {
           leaveTypeBreakdown: [],
           status: 'success',
         };
+
+        let employeeHasChanges = false;
 
         for (const leaveType of activeLeaveTypes) {
           const balance = await EmployeeLeaveBalance.findOne({
@@ -1082,11 +1085,6 @@ const executeLeaveReset = async (req, res) => {
             carriedForward = Math.min(previousBalance, leaveType.maxCarryForwardDays);
             expired = previousBalance - carriedForward;
 
-            const expiryDate = new Date(year);
-            const [month, day] = leaveType.fixedExpiryDate.split('-');
-            expiryDate.setMonth(parseInt(month) - 1);
-            expiryDate.setDate(parseInt(day));
-
             await EmployeeLeaveBalance.updateOne(
               { _id: balance._id },
               {
@@ -1094,7 +1092,6 @@ const executeLeaveReset = async (req, res) => {
                   remainingDays: carriedForward,
                   isCarriedForward: true,
                   carriedForwardFrom: balance.year,
-                  expiryDate: expiryDate,
                 },
               }
             ).session(session);
@@ -1118,17 +1115,22 @@ const executeLeaveReset = async (req, res) => {
 
           totalCarriedForward += carriedForward;
           totalExpired += expired;
+          employeeHasChanges = true;
         }
 
-        resetLog.details.push(employeeDetail);
+        if (employeeHasChanges) {
+          resetLog.details.push(employeeDetail);
+          totalEmployeesProcessed++;
+        }
+        
         resetLog.summary.employeesSuccessfullyProcessed++;
       } catch (empError) {
-        console.error(`❌ Error processing employee ${employee.name}:`, empError);
         resetLog.details.push({
           employeeId: employee._id,
           employeeName: employee.name,
           status: 'failed',
           error: empError.message,
+          leaveTypeBreakdown: [],
         });
         resetLog.summary.employeesFailed++;
       }
@@ -1140,25 +1142,74 @@ const executeLeaveReset = async (req, res) => {
 
     await LeaveResetLog.create([resetLog], { session });
 
+    // ═════════════════════════════════════════════════════════════════
+    // AUTO-GRANT NEW YEAR LEAVES (if enabled)
+    // ═════════════════════════════════════════════════════════════════
+    let autoGrantResult = null;
+    if (autoGrantNewYear) {
+      let grantedCount = 0;
+      let skippedCount = 0;
+      let failedCount = 0;
+
+      for (const employee of employees) {
+        try {
+          for (const leaveType of activeLeaveTypes) {
+            const existingBalance = await EmployeeLeaveBalance.findOne({
+              userId: employee._id,
+              leaveTypeId: leaveType._id,
+              year,
+              companyId: req.user.companyId,
+            }).session(session);
+
+            if (existingBalance) {
+              skippedCount++;
+              continue;
+            }
+
+            await EmployeeLeaveBalance.create([{
+              userId: employee._id,
+              leaveTypeId: leaveType._id,
+              year,
+              allocatedDays: leaveType.yearlyCount,
+              remainingDays: leaveType.yearlyCount,
+              companyId: req.user.companyId,
+              status: 'active',
+              originalGranted: leaveType.yearlyCount,
+              isCarriedForward: false,
+            }], { session });
+
+            grantedCount++;
+          }
+        } catch (empError) {
+          failedCount++;
+        }
+      }
+
+      autoGrantResult = {
+        grantedCount,
+        skippedCount,
+        failedCount,
+        totalEmployees: employees.length,
+      };
+    }
+
     await session.commitTransaction();
     session.endSession();
 
-    console.log(`\n✅ ========== LEAVE RESET COMPLETED ==========`);
-    console.log(`✅ Employees Processed: ${resetLog.summary.employeesSuccessfullyProcessed}`);
-    console.log(`✅ Employees Failed: ${resetLog.summary.employeesFailed}`);
-    console.log(`✅ Leaves Carried Forward: ${totalCarriedForward}`);
-    console.log(`✅ Leaves Expired: ${totalExpired}`);
+    const responseMessage = autoGrantNewYear
+      ? `Leave reset completed successfully. ${totalEmployeesProcessed} employees processed, ${totalCarriedForward} days carried forward, ${totalExpired} days expired. Auto-granted ${year} leaves: ${autoGrantResult.grantedCount} granted, ${autoGrantResult.skippedCount} skipped.`
+      : `Leave reset completed successfully. ${totalEmployeesProcessed} employees processed, ${totalCarriedForward} days carried forward, ${totalExpired} days expired. Grant new year leaves manually.`;
 
     return res.json({
       success: true,
-      message: `Leave reset completed successfully. ${totalCarriedForward} days carried forward, ${totalExpired} days expired.`,
+      message: responseMessage,
       summary: resetLog.summary,
+      autoGrantResult,
     });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
 
-    console.error('❌ Execute leave reset error:', error);
     return res.status(500).json({
       success: false,
       message: 'Error executing leave reset',
@@ -1196,7 +1247,7 @@ const getResetHistory = async (req, res) => {
       limit: parseInt(limit),
     });
   } catch (error) {
-    console.error('Get reset history error:', error);
+   
     return res.status(500).json({
       success: false,
       message: 'Error fetching reset history',
