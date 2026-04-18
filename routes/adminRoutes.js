@@ -36,6 +36,12 @@ const {
   deleteHoliday,
 } = require('../controllers/holidayController');
 const { allocateIndividualLeave } = require('../controllers/leaveController');
+const {
+  createSupportTicket,
+  getSupportTickets,
+  getTicketById,
+  addTicketResponse,
+} = require('../controllers/adminController');
 const { protect, admin } = require('../middleware/authMiddleware');
 
 // ─── Holiday Routes (Moved to top) ────────────────────────────────
@@ -126,5 +132,21 @@ router
   .route('/weekoff')
   .get(protect, admin, getWeekOffConfig)
   .put(protect, admin, updateWeekOffConfig);
+
+// ═══════════════════════════════════════════════════════════
+// Support Ticket Routes
+// ═══════════════════════════════════════════════════════════
+// POST   /api/admin/support/tickets         → create new ticket
+// GET    /api/admin/support/tickets         → list all tickets for company
+// GET    /api/admin/support/tickets/:id     → get ticket details
+// POST   /api/admin/support/tickets/:id/response  → add response to ticket
+
+router
+  .route('/support/tickets')
+  .post(protect, admin, createSupportTicket)
+  .get(protect, admin, getSupportTickets);
+
+router.get('/support/tickets/:id', protect, admin, getTicketById);
+router.post('/support/tickets/:id/response', protect, admin, addTicketResponse);
 
 module.exports = router;

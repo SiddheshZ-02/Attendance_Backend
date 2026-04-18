@@ -6,6 +6,7 @@ const LeaveRequest = require('../models/LeaveRequest');
 const EmployeeLeaveBalance = require('../models/EmployeeLeaveBalance');
 const Department = require('../models/Department');
 const WeekOffConfig = require('../models/WeekOffConfig');
+const SupportTicket = require('../models/SupportTicket');
 const { formatDate, generateToken, logActivity } = require('../utils/helpers');
 
 let statisticsCache = {
@@ -1774,6 +1775,211 @@ const updateWeekOffConfig = async (req, res) => {
   }
 };
 
+// ═════════════════════════════════════════════════════════════════
+// HELPER — Generate ticket number
+// ═════════════════════════════════════════════════════════════════
+const generateTicketNumber = () => {
+  const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+  return `TKT-${random}`;
+};
+
+// ═════════════════════════════════════════════════════════════════
+// SUPPORT TICKET MANAGEMENT
+// ═════════════════════════════════════════════════════════════════
+
+// Create support ticket (for admin to raise issues)
+const createSupportTicket = async (req, res) => {
+  try {
+    const { subject, description, priority, category } = req.body;
+    const userId = req.user._id;
+    const companyId = req.user.companyId;
+
+    // Validation
+    if (!subject || !description) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_FIELDS',
+        message: 'Subject and description are required.',
+      });
+    }
+
+    if (!companyId) {
+      return res.status(400).json({
+        success: false,
+        code: 'NO_COMPANY',
+        message: 'Your account is not associated with any company.',
+      });
+    }
+
+    // Generate ticket number
+    const ticketNumber = generateTicketNumber();
+
+    // Create ticket
+    const ticket = await SupportTicket.create({
+      ticketNumber,
+      companyId,
+      raisedBy: userId,
+      subject: subject.trim(),
+      description: description.trim(),
+      priority: priority || 'medium',
+      category: category || 'other',
+      status: 'open',
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: ticket,
+      message: 'Support ticket created successfully.',
+    });
+  } catch (error) {
+    console.error('❌ Error creating support ticket:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Failed to create support ticket.',
+    });
+  }
+};
+
+// Get support tickets for admin (tickets raised by their company)
+const getSupportTickets = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status } = req.query;
+    const companyId = req.user.companyId;
+
+    if (!companyId) {
+      return res.status(400).json({
+        success: false,
+        code: 'NO_COMPANY',
+        message: 'Your account is not associated with any company.',
+      });
+    }
+
+    const filter = { companyId };
+
+    if (status && status !== 'All') {
+      filter.status = status.toLowerCase();
+    }
+
+    const tickets = await SupportTicket.find(filter)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .populate('raisedBy', 'name email')
+      .lean();
+
+    const total = await SupportTicket.countDocuments(filter);
+
+    return res.json({
+      success: true,
+      data: {
+        tickets,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(total / limit),
+          totalItems: total,
+          itemsPerPage: parseInt(limit),
+        },
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error fetching support tickets:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Failed to fetch support tickets.',
+    });
+  }
+};
+
+// Get single ticket details
+const getTicketById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const companyId = req.user.companyId;
+
+    const ticket = await SupportTicket.findOne({
+      _id: id,
+      companyId,
+    })
+      .populate('raisedBy', 'name email')
+      .populate('responses.from', 'name email role')
+      .lean();
+
+    if (!ticket) {
+      return res.status(404).json({
+        success: false,
+        code: 'TICKET_NOT_FOUND',
+        message: 'Ticket not found.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: ticket,
+    });
+  } catch (error) {
+    console.error('❌ Error fetching ticket:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Failed to fetch ticket.',
+    });
+  }
+};
+
+// Add response to ticket (admin can add follow-up messages)
+const addTicketResponse = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+    const userId = req.user._id;
+    const companyId = req.user.companyId;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_FIELDS',
+        message: 'Message is required.',
+      });
+    }
+
+    const ticket = await SupportTicket.findOne({
+      _id: id,
+      companyId,
+    });
+
+    if (!ticket) {
+      return res.status(404).json({
+        success: false,
+        code: 'TICKET_NOT_FOUND',
+        message: 'Ticket not found.',
+      });
+    }
+
+    ticket.responses.push({
+      from: userId,
+      message: message.trim(),
+      timestamp: new Date(),
+    });
+
+    await ticket.save();
+
+    return res.json({
+      success: true,
+      data: ticket,
+      message: 'Response added successfully.',
+    });
+  } catch (error) {
+    console.error('❌ Error adding response:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Failed to add response.',
+    });
+  }
+};
+
 
 module.exports = {
   getAdmins,
@@ -1803,4 +2009,8 @@ module.exports = {
   deleteDepartment,
   getWeekOffConfig,
   updateWeekOffConfig,
+  createSupportTicket,
+  getSupportTickets,
+  getTicketById,
+  addTicketResponse,
 };

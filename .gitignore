@@ -1,2 +1,10 @@
 node_modules
 .env
+
+
+#Script
+node scripts/createOwner.js
+node scripts/fixCompanyData.js
+node scripts/fixExistingCompanies.js
+node scripts/quickCheck.js
+
