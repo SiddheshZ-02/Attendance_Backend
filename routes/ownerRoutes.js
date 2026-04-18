@@ -20,6 +20,12 @@ const {
   getRevenueAnalytics,
   retryPayment,
   downloadInvoice,
+  // Invoice Template
+  getInvoiceTemplate,
+  createInvoiceTemplate,
+  updateInvoiceTemplate,
+  uploadTemplateLogo,
+  uploadTemplateSignature,
   // Plans
   getPlans,
   getPlanAnalytics,
@@ -70,6 +76,15 @@ router.get('/billing/invoices', protect, owner, getInvoices);
 router.get('/billing/revenue-analytics', protect, owner, getRevenueAnalytics);
 router.post('/billing/invoices/:id/retry', protect, owner, retryPayment);
 router.get('/billing/invoices/:id/download', protect, owner, downloadInvoice);
+
+// ═══════════════════════════════════════════════════════════
+// Invoice Template
+// ═══════════════════════════════════════════════════════════
+router.post('/invoice-template/upload-logo', protect, owner, uploadTemplateLogo);
+router.post('/invoice-template/upload-signature', protect, owner, uploadTemplateSignature);
+router.get('/invoice-template', protect, owner, getInvoiceTemplate);
+router.post('/invoice-template', protect, owner, createInvoiceTemplate);
+router.put('/invoice-template', protect, owner, updateInvoiceTemplate);
 
 // ═══════════════════════════════════════════════════════════
 // Plans

@@ -1,6 +1,7 @@
 const Company = require('../models/Company');
 const User = require('../models/User');
 const Invoice = require('../models/Invoice');
+const InvoiceTemplate = require('../models/InvoiceTemplate');
 const Plan = require('../models/Plan');
 const SupportTicket = require('../models/SupportTicket');
 const OwnerSettings = require('../models/OwnerSettings');
@@ -8,6 +9,9 @@ const Attendance = require('../models/Attendance');
 const Activity = require('../models/Activity');
 const bcrypt = require('bcryptjs');
 const PDFDocument = require('pdfkit');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
 // Pricing configuration
 const PRICING_PLANS = {
@@ -2025,6 +2029,212 @@ const updateSettings = async (req, res) => {
   }
 };
 
+// ═══════════════════════════════════════════════════════════
+// INVOICE TEMPLATE
+// ═══════════════════════════════════════════════════════════
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, '../uploads/invoice-template');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  },
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'));
+    }
+  },
+});
+
+// Get invoice template
+const getInvoiceTemplate = async (req, res) => {
+  try {
+    const ownerId = req.user._id;
+    
+    let template = await InvoiceTemplate.findOne({ ownerId });
+    
+    if (!template) {
+      return res.status(404).json({
+        success: false,
+        message: 'No invoice template found. Please create one.',
+      });
+    }
+    
+    return res.json({
+      success: true,
+      data: template,
+    });
+  } catch (error) {
+    console.error('Error fetching invoice template:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch invoice template.',
+    });
+  }
+};
+
+// Create invoice template
+const createInvoiceTemplate = async (req, res) => {
+  try {
+    const ownerId = req.user._id;
+    
+    // Check if template already exists
+    const existingTemplate = await InvoiceTemplate.findOne({ ownerId });
+    if (existingTemplate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invoice template already exists. Please update instead.',
+      });
+    }
+    
+    const template = new InvoiceTemplate({
+      ownerId,
+      ...req.body,
+    });
+    
+    await template.save();
+    
+    return res.status(201).json({
+      success: true,
+      data: template,
+      message: 'Invoice template created successfully.',
+    });
+  } catch (error) {
+    console.error('Error creating invoice template:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create invoice template.',
+    });
+  }
+};
+
+// Update invoice template
+const updateInvoiceTemplate = async (req, res) => {
+  try {
+    const ownerId = req.user._id;
+    
+    let template = await InvoiceTemplate.findOne({ ownerId });
+    
+    if (!template) {
+      return res.status(404).json({
+        success: false,
+        message: 'No invoice template found. Please create one first.',
+      });
+    }
+    
+    // Update fields
+    Object.keys(req.body).forEach((key) => {
+      if (key === 'address' || key === 'bankDetails') {
+        template[key] = { ...template[key], ...req.body[key] };
+      } else {
+        template[key] = req.body[key];
+      }
+    });
+    
+    await template.save();
+    
+    return res.json({
+      success: true,
+      data: template,
+      message: 'Invoice template updated successfully.',
+    });
+  } catch (error) {
+    console.error('Error updating invoice template:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update invoice template.',
+    });
+  }
+};
+
+// Upload logo
+const uploadTemplateLogo = async (req, res) => {
+  try {
+    upload.single('logo')(req, res, async (err) => {
+      if (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message,
+        });
+      }
+      
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No file uploaded.',
+        });
+      }
+      
+      const fileUrl = `/uploads/invoice-template/${req.file.filename}`;
+      
+      return res.json({
+        success: true,
+        data: { url: fileUrl },
+        message: 'Logo uploaded successfully.',
+      });
+    });
+  } catch (error) {
+    console.error('Error uploading logo:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to upload logo.',
+    });
+  }
+};
+
+// Upload signature
+const uploadTemplateSignature = async (req, res) => {
+  try {
+    upload.single('signature')(req, res, async (err) => {
+      if (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message,
+        });
+      }
+      
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No file uploaded.',
+        });
+      }
+      
+      const fileUrl = `/uploads/invoice-template/${req.file.filename}`;
+      
+      return res.json({
+        success: true,
+        data: { url: fileUrl },
+        message: 'Signature uploaded successfully.',
+      });
+    });
+  } catch (error) {
+    console.error('Error uploading signature:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to upload signature.',
+    });
+  }
+};
+
 module.exports = {
   // Dashboard
   getOwnerDashboardAnalytics,
@@ -2045,6 +2255,12 @@ module.exports = {
   getRevenueAnalytics,
   retryPayment,
   downloadInvoice,
+  // Invoice Template
+  getInvoiceTemplate,
+  createInvoiceTemplate,
+  updateInvoiceTemplate,
+  uploadTemplateLogo,
+  uploadTemplateSignature,
   // Plans
   getPlans,
   getPlanAnalytics,
