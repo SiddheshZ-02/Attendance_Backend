@@ -133,6 +133,7 @@ const loginUser = async (req, res) => {
     securityLogger.authSuccess(user._id, req.ip, req.get('User-Agent'));
 
     const sessionId = (crypto.randomUUID && crypto.randomUUID()) || crypto.randomBytes(16).toString('hex');
+    const deviceId = req.body?.deviceId || null;
     
     // Generate both Access and Refresh tokens (JWT-based)
     const { accessToken, refreshToken } = generateToken(
@@ -145,6 +146,7 @@ const loginUser = async (req, res) => {
     const newSession = {
       sessionId: sessionId,
       platform,
+      deviceId: deviceId,
       deviceInfo: req.get('User-Agent') || 'Unknown Device',
       refreshTokenHash: crypto.createHash('sha256').update(refreshToken).digest('hex'),
       refreshTokenExpires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
@@ -247,6 +249,29 @@ const refreshAccessToken = async (req, res) => {
 
     // Find specific session for this token
     const currentSession = user.sessions.find(s => s.sessionId === decoded.sid);
+    
+    // ── 3. Detect Token Reuse (Security Enhancement) ─────────────
+    const incomingHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    
+    if (currentSession && currentSession.refreshTokenHash !== incomingHash) {
+      // REUSE DETECTED: This refresh token is valid but doesn't match the current one in DB.
+      // This happens if someone steals an old refresh token.
+      user.sessions = []; // Clear all sessions for security
+      user.authVersion = (user.authVersion || 0) + 1; // Invalidate all access tokens
+      await user.save();
+
+      securityLogger.suspiciousActivity(req.ip, req.get('User-Agent'), 'REFRESH_TOKEN_REUSE', {
+        userId: user._id,
+        sessionId: decoded.sid,
+      });
+
+      return res.status(403).json({
+        success: false,
+        code: 'TOKEN_THEFT_DETECTED',
+        message: 'Security breach detected. Please log in again.',
+      });
+    }
+
     if (!currentSession) {
       const tokenIssuedAtMs = decoded.iat ? Number(decoded.iat) * 1000 : null;
       const invalidatedAtMs = user.lastSessionInvalidationAt
@@ -268,20 +293,6 @@ const refreshAccessToken = async (req, res) => {
         success: false,
         code: 'SESSION_REVOKED',
         message: 'Session has been revoked or updated elsewhere.',
-      });
-    }
-
-    // 3. Compare hash
-    const incomingHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-    if (incomingHash !== currentSession.refreshTokenHash) {
-      // Potential theft! Revoke this specific session
-      user.sessions = user.sessions.filter(s => s.sessionId !== decoded.sid);
-      await user.save();
-      
-      return res.status(401).json({
-        success: false,
-        code: 'TOKEN_THEFT_DETECTED',
-        message: 'Security breach detected. Please log in again.',
       });
     }
 

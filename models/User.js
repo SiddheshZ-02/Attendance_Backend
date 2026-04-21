@@ -95,6 +95,7 @@ const userSchema = new mongoose.Schema(
           enum: ['app', 'web'],
           default: 'web',
         },
+        deviceId: { type: String, default: null },
         deviceInfo: { type: String, default: null },
         refreshTokenHash: { type: String, required: true },
         refreshTokenExpires: { type: Date, required: true },
