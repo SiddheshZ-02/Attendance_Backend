@@ -1,4 +1,7 @@
 require('dotenv').config();
+// Validates JWT_SECRET + REFRESH_TOKEN_SECRET before the app loads route modules.
+require('./config/authSecrets');
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -20,7 +23,8 @@ const app = express();
 // Connect to MongoDB
 connectDB();
 
-// Basic Security and CORS
+// CORS: `origin: '*'` is typical for a mobile-only API (React Native does not send browser Origin).
+// If you add a browser SPA to this API, replace with an allowlist, e.g. origin: ['https://app.example.com'].
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],

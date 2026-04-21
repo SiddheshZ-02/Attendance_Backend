@@ -1,7 +1,31 @@
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { REFRESH_TOKEN_SECRET } = require('../config/authSecrets');
 const { generateToken, logActivity } = require('../utils/helpers');
 const { securityLogger } = require('../utils/logger');
+
+const CROSS_PLATFORM_SESSION_MESSAGE =
+  'Session ended. Your account was used on another platform';
+
+const getSessionPlatform = (req) => {
+  const requested = String(req.body?.platform || '').trim().toLowerCase();
+  if (requested === 'app' || requested === 'web') {
+    return requested;
+  }
+  const ua = String(req.get('User-Agent') || '').toLowerCase();
+  if (
+    ua.includes('okhttp') ||
+    ua.includes('reactnative') ||
+    ua.includes('react-native') ||
+    ua.includes('android') ||
+    ua.includes('iphone') ||
+    ua.includes('ios')
+  ) {
+    return 'app';
+  }
+  return 'web';
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER — strip sensitive fields and return a clean user object
@@ -31,6 +55,7 @@ const sanitizeUser = (user) => ({
 const loginUser = async (req, res) => {
   try {
     const { email, password, location } = req.body;
+    const platform = getSessionPlatform(req);
 
     // ── 1. Validate required credentials ─────────────────────────
     if (!email || !password) {
@@ -110,15 +135,29 @@ const loginUser = async (req, res) => {
     const sessionId = (crypto.randomUUID && crypto.randomUUID()) || crypto.randomBytes(16).toString('hex');
     
     // Generate both Access and Refresh tokens (JWT-based)
-    const { accessToken, refreshToken } = generateToken(user._id, sessionId);
+    const { accessToken, refreshToken } = generateToken(
+      user._id,
+      sessionId,
+      user.authVersion || 0,
+    );
 
     // Create new session object
     const newSession = {
       sessionId: sessionId,
+      platform,
       deviceInfo: req.get('User-Agent') || 'Unknown Device',
       refreshTokenHash: crypto.createHash('sha256').update(refreshToken).digest('hex'),
       refreshTokenExpires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
     };
+
+    // Revoke opposite-platform sessions (both-way exclusivity between web/app)
+    const oppositePlatform = platform === 'app' ? 'web' : 'app';
+    const hadOppositePlatformSessions = user.sessions.some(s => s.platform === oppositePlatform);
+    if (hadOppositePlatformSessions) {
+      user.sessions = user.sessions.filter(s => s.platform !== oppositePlatform);
+      user.lastSessionInvalidationAt = new Date();
+      user.lastSessionInvalidationReason = 'CROSS_PLATFORM_LOGIN';
+    }
 
     // Add session to array and limit to 2 devices
     user.sessions.push(newSession);
@@ -174,13 +213,10 @@ const refreshAccessToken = async (req, res) => {
       });
     }
 
-    const jwt = require('jsonwebtoken');
-    const secret = process.env.REFRESH_TOKEN_SECRET || 'your-refresh-secret-key-change-in-production';
-
     // 1. Verify token structure/expiry
     let decoded;
     try {
-      decoded = jwt.verify(refreshToken, secret);
+      decoded = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET);
     } catch (err) {
       return res.status(401).json({
         success: false,
@@ -199,9 +235,35 @@ const refreshAccessToken = async (req, res) => {
       });
     }
 
+    const tokenAv = decoded.av !== undefined && decoded.av !== null ? Number(decoded.av) : 0;
+    const userAv = user.authVersion || 0;
+    if (!Number.isFinite(tokenAv) || tokenAv !== userAv) {
+      return res.status(401).json({
+        success: false,
+        code: 'TOKEN_VERSION_STALE',
+        message: 'Your session is no longer valid. Please log in again.',
+      });
+    }
+
     // Find specific session for this token
     const currentSession = user.sessions.find(s => s.sessionId === decoded.sid);
     if (!currentSession) {
+      const tokenIssuedAtMs = decoded.iat ? Number(decoded.iat) * 1000 : null;
+      const invalidatedAtMs = user.lastSessionInvalidationAt
+        ? user.lastSessionInvalidationAt.getTime()
+        : null;
+      const isCrossPlatformInvalidation =
+        user.lastSessionInvalidationReason === 'CROSS_PLATFORM_LOGIN' &&
+        Number.isFinite(tokenIssuedAtMs) &&
+        Number.isFinite(invalidatedAtMs) &&
+        tokenIssuedAtMs <= invalidatedAtMs;
+      if (isCrossPlatformInvalidation) {
+        return res.status(401).json({
+          success: false,
+          code: 'SESSION_ENDED_PLATFORM_SWITCH',
+          message: CROSS_PLATFORM_SESSION_MESSAGE,
+        });
+      }
       return res.status(401).json({
         success: false,
         code: 'SESSION_REVOKED',
@@ -233,7 +295,11 @@ const refreshAccessToken = async (req, res) => {
     }
 
     // 6. Generate new tokens (Rotation)
-    const { accessToken, refreshToken: newRefreshToken } = generateToken(user._id, currentSession.sessionId);
+    const { accessToken, refreshToken: newRefreshToken } = generateToken(
+      user._id,
+      currentSession.sessionId,
+      user.authVersion || 0,
+    );
 
     // Update refresh token in DB for this specific session (Refresh Token Rotation)
     currentSession.refreshTokenHash = crypto.createHash('sha256').update(newRefreshToken).digest('hex');
@@ -264,8 +330,6 @@ const refreshAccessToken = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════════════════
 const logoutUser = async (req, res) => {
   try {
-
-
     req.user.sessions = req.user.sessions.filter(s => s.sessionId !== req.user.currentSessionId);
     await req.user.save();
 
@@ -281,6 +345,31 @@ const logoutUser = async (req, res) => {
       success: false,
       code: 'LOGOUT_ERROR',
       message: 'Logout failed. Please try again.',
+    });
+  }
+};
+
+// @desc    Sign out all devices (this device included — must log in again)
+// @route   POST /api/auth/logout-all
+// @access  Private
+const logoutAllDevices = async (req, res) => {
+  try {
+    req.user.sessions = [];
+    req.user.authVersion = (req.user.authVersion || 0) + 1;
+    await req.user.save();
+
+    securityLogger.authSuccess(req.user._id, req.ip, req.get('User-Agent'));
+
+    return res.json({
+      success: true,
+      message: 'Signed out on all devices. Please log in again.',
+    });
+  } catch (error) {
+    securityLogger.systemError(error, req);
+    return res.status(500).json({
+      success: false,
+      code: 'LOGOUT_ALL_ERROR',
+      message: 'Could not sign out all devices.',
     });
   }
 };
@@ -374,6 +463,8 @@ const updateUserProfile = async (req, res) => {
       }
 
       user.password = newPassword; // pre-save hook will hash this
+      user.sessions = [];
+      user.authVersion = (user.authVersion || 0) + 1;
     }
 
     const updatedUser = await user.save();
@@ -473,7 +564,8 @@ const forgotPassword = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════════════════
 const resetPassword = async (req, res) => {
   try {
-    const { token, newPassword } = req.body;
+    const token = req.body.token || req.params.token;
+    const { newPassword } = req.body;
 
     if (!token || !newPassword) {
       return res.status(400).json({
@@ -507,10 +599,12 @@ const resetPassword = async (req, res) => {
       });
     }
 
-    // Update password and clear reset fields
+    // Update password and clear reset fields; revoke all sessions
     user.password = newPassword; // pre-save hook hashes it
     user.passwordResetToken = null;
     user.passwordResetExpires = null;
+    user.sessions = [];
+    user.authVersion = (user.authVersion || 0) + 1;
 
     await user.save();
 
@@ -634,6 +728,7 @@ const getUpcomingBirthdays = async (req, res) => {
 module.exports = {
   loginUser,
   logoutUser,
+  logoutAllDevices,
   getUserProfile,
   updateUserProfile,
   forgotPassword,

@@ -81,15 +81,34 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    /** Bumped on password change/reset and logout-all — invalidates old JWTs without `av` treated as 0 */
+    authVersion: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     sessions: [
       {
         sessionId: { type: String, required: true },
+        platform: {
+          type: String,
+          enum: ['app', 'web'],
+          default: 'web',
+        },
         deviceInfo: { type: String, default: null },
         refreshTokenHash: { type: String, required: true },
         refreshTokenExpires: { type: Date, required: true },
         createdAt: { type: Date, default: Date.now },
       }
     ],
+    lastSessionInvalidationAt: {
+      type: Date,
+      default: null,
+    },
+    lastSessionInvalidationReason: {
+      type: String,
+      default: null,
+    },
 
     // ── Password Reset ─────────────────────────────────────────────
     passwordChangedAt: {

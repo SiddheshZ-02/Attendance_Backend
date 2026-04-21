@@ -1,6 +1,10 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { JWT_SECRET } = require('../config/authSecrets');
 const { securityLogger } = require('../utils/logger');
+
+const CROSS_PLATFORM_SESSION_MESSAGE =
+  'Session ended. Your account was used on another platform';
 
 // ═════════════════════════════════════════════════════════════════════════════
 // protect — verifies JWT and attaches user to req.user
@@ -27,10 +31,7 @@ const protect = async (req, res, next) => {
 
   try {
     // ── 2. Verify token ─────────────────────────────────────────
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || 'your-secret-key-change-in-production'
-    );
+    const decoded = jwt.verify(token, JWT_SECRET);
 
     // ── 3. Fetch user from DB ───────────────────────────────────
     const user = await User.findById(decoded.id).select(
@@ -56,12 +57,37 @@ const protect = async (req, res, next) => {
       });
     }
 
-    
-  
+    const tokenAv = decoded.av !== undefined && decoded.av !== null ? Number(decoded.av) : 0;
+    const userAv = user.authVersion || 0;
+    if (Number.isFinite(tokenAv) && tokenAv !== userAv) {
+      securityLogger.authFailure(user.email, req.ip, req.get('User-Agent'), 'TOKEN_VERSION_STALE');
+      return res.status(401).json({
+        success: false,
+        code: 'TOKEN_VERSION_STALE',
+        message: 'Your session is no longer valid. Please log in again.',
+      });
+    }
 
     const currentSession = user.sessions.find(s => s.sessionId === decoded.sid);
 
     if (!currentSession) {
+      const tokenIssuedAtMs = decoded.iat ? Number(decoded.iat) * 1000 : null;
+      const invalidatedAtMs = user.lastSessionInvalidationAt
+        ? user.lastSessionInvalidationAt.getTime()
+        : null;
+      const isCrossPlatformInvalidation =
+        user.lastSessionInvalidationReason === 'CROSS_PLATFORM_LOGIN' &&
+        Number.isFinite(tokenIssuedAtMs) &&
+        Number.isFinite(invalidatedAtMs) &&
+        tokenIssuedAtMs <= invalidatedAtMs;
+      if (isCrossPlatformInvalidation) {
+        securityLogger.authFailure(user.email, req.ip, req.get('User-Agent'), 'SESSION_ENDED_PLATFORM_SWITCH');
+        return res.status(401).json({
+          success: false,
+          code: 'SESSION_ENDED_PLATFORM_SWITCH',
+          message: CROSS_PLATFORM_SESSION_MESSAGE,
+        });
+      }
       securityLogger.authFailure(user.email, req.ip, req.get('User-Agent'), 'SESSION_REVOKED');
       return res.status(401).json({
         success: false,

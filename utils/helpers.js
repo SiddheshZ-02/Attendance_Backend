@@ -15,22 +15,23 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return distance; // in meters
 };
 
-// Generate JWT tokens (Access and Refresh)
-const generateToken = (id, sessionId) => {
+const { JWT_SECRET, REFRESH_TOKEN_SECRET } = require('../config/authSecrets');
+
+// Generate JWT tokens (Access and Refresh). `av` = user.authVersion for global invalidation.
+const generateToken = (id, sessionId, authVersion = 0) => {
   const jwt = require('jsonwebtoken');
-  
-  // Short-lived access token (e.g., 1 hour)
+  const av = typeof authVersion === 'number' && authVersion >= 0 ? authVersion : 0;
+
   const accessToken = jwt.sign(
-    { id, sid: sessionId }, 
-    process.env.JWT_SECRET || 'your-secret-key-change-in-production', 
-    { expiresIn: '1h' }
+    { id, sid: sessionId, av },
+    JWT_SECRET,
+    { expiresIn: '1h' },
   );
 
-  // Long-lived refresh token (30 days with sliding expiry)
   const refreshToken = jwt.sign(
-    { id, sid: sessionId }, 
-    process.env.REFRESH_TOKEN_SECRET || 'your-refresh-secret-key-change-in-production', 
-    { expiresIn: '30d' }
+    { id, sid: sessionId, av },
+    REFRESH_TOKEN_SECRET,
+    { expiresIn: '30d' },
   );
 
   return { accessToken, refreshToken };
