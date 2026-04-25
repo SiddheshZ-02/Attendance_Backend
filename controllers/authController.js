@@ -1,5 +1,7 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const fs = require('fs');
+const path = require('path');
 const User = require('../models/User');
 const { REFRESH_TOKEN_SECRET } = require('../config/authSecrets');
 const { generateToken, logActivity } = require('../utils/helpers');
@@ -39,6 +41,7 @@ const sanitizeUser = (user) => ({
   employeeId: user.employeeId,
   department: user.department,
   phone: user.phone,
+  profilePicture: user.profilePicture,
   isActive: user.isActive,
   lastLoginAt: user.lastLoginAt,
 });
@@ -736,12 +739,74 @@ const getUpcomingBirthdays = async (req, res) => {
   }
 };
 
+// ═════════════════════════════════════════════════════════════════════════════
+// @desc    Update profile picture
+// @route   PUT /api/auth/profile-picture
+// @access  Private
+// ═════════════════════════════════════════════════════════════════════════════
+const updateProfilePicture = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        code: 'NO_FILE',
+        message: 'Please upload an image file.',
+      });
+    }
+
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      // Delete the uploaded file if user not found
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({
+        success: false,
+        code: 'USER_NOT_FOUND',
+        message: 'User not found.',
+      });
+    }
+
+    // Delete old profile picture if it exists
+    if (user.profilePicture) {
+      const oldPath = path.join(__dirname, '..', user.profilePicture);
+      if (fs.existsSync(oldPath)) {
+        try {
+          fs.unlinkSync(oldPath);
+        } catch (err) {
+          console.error('Failed to delete old profile picture:', err);
+        }
+      }
+    }
+
+    // Update user with new relative path
+    const relativePath = `uploads/profiles/${req.file.filename}`;
+    user.profilePicture = relativePath;
+    await user.save();
+
+    return res.json({
+      success: true,
+      message: 'Profile picture updated successfully.',
+      data: {
+        profilePicture: relativePath,
+      },
+    });
+  } catch (error) {
+    securityLogger.systemError(error, req);
+    return res.status(500).json({
+      success: false,
+      code: 'UPLOAD_ERROR',
+      message: 'Failed to upload profile picture.',
+    });
+  }
+};
+
 module.exports = {
   loginUser,
   logoutUser,
   logoutAllDevices,
   getUserProfile,
   updateUserProfile,
+  updateProfilePicture,
   forgotPassword,
   resetPassword,
   refreshAccessToken,

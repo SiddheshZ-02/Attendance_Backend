@@ -6,6 +6,7 @@ const {
   logoutAllDevices,
   getUserProfile,
   updateUserProfile,
+  updateProfilePicture,
   forgotPassword,
   resetPassword,
   refreshAccessToken,
@@ -16,6 +17,7 @@ const { protect } = require('../middleware/authMiddleware');
 const User = require('../models/User');
 const Company = require('../models/Company');
 const { loginLimiter, refreshLimiter } = require('../middleware/authRateLimit');
+const upload = require('../middleware/uploadMiddleware');
 
 // Dev-only escape hatch — set ENABLE_AUTH_DEBUG_ROUTES=true in .env (never in production).
 if (process.env.ENABLE_AUTH_DEBUG_ROUTES === 'true') {
@@ -34,6 +36,7 @@ router.post('/logout', protect, logoutUser);
 router.post('/logout-all', protect, logoutAllDevices);
 router.get('/profile', protect, getUserProfile);
 router.put('/profile', protect, updateUserProfile);
+router.put('/profile-picture', protect, upload.single('image'), updateProfilePicture);
 router.post('/forgot-password', forgotPassword);
 // Token in JSON body `{ token, newPassword }` (primary). Optional legacy: `POST /reset-password/:token` with same body.
 router.post('/reset-password', resetPassword);

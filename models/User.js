@@ -65,6 +65,10 @@ const userSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    profilePicture: {
+      type: String,
+      default: '',
+    },
     dateOfBirth: {
       type: Date,
       default: null,
