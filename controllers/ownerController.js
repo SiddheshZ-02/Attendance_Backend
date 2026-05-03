@@ -598,6 +598,60 @@ const updateCompany = async (req, res) => {
   }
 };
 
+// Toggle company status (Activate/Deactivate)
+const toggleCompanyStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // 'active' or 'inactive'
+    const ownerId = req.user._id;
+
+    if (!['active', 'inactive'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Use "active" or "inactive".',
+      });
+    }
+
+    const company = await Company.findOne({
+      _id: id,
+      ownerId,
+      isDeleted: false,
+    });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        code: 'COMPANY_NOT_FOUND',
+        message: 'Company not found.',
+      });
+    }
+
+    // Update company status
+    company.status = status;
+    await company.save();
+
+    // Cascading effect: Update all users of this company
+    const isActive = status === 'active';
+    await User.updateMany(
+      { companyId: id },
+      { $set: { isActive: isActive } }
+    );
+
+    return res.json({
+      success: true,
+      message: `Company ${status === 'active' ? 'activated' : 'deactivated'} successfully.`,
+      data: company,
+    });
+  } catch (error) {
+    console.error('Error toggling company status:', error);
+    return res.status(500).json({
+      success: false,
+      code: 'SERVER_ERROR',
+      message: 'Failed to toggle company status.',
+    });
+  }
+};
+
 // Delete company (soft delete)
 const deleteCompany = async (req, res) => {
   try {
@@ -2243,6 +2297,7 @@ module.exports = {
   getCompanyById,
   createCompany,
   updateCompany,
+  toggleCompanyStatus,
   deleteCompany,
   updateCompanySubscription,
   // Admin

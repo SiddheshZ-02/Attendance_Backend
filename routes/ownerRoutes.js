@@ -8,6 +8,7 @@ const {
   getCompanyById,
   createCompany,
   updateCompany,
+  toggleCompanyStatus,
   deleteCompany,
   updateCompanySubscription,
   // Admin
@@ -58,6 +59,7 @@ router.get('/companies', protect, owner, getOwnerCompanies);
 router.post('/companies', protect, owner, createCompany);
 router.get('/companies/:id', protect, owner, getCompanyById);
 router.put('/companies/:id', protect, owner, updateCompany);
+router.patch('/companies/:id/status', protect, owner, toggleCompanyStatus);
 router.delete('/companies/:id', protect, owner, deleteCompany);
 router.put('/companies/:id/subscription', protect, owner, updateCompanySubscription);
 
