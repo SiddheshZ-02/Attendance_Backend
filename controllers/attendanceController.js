@@ -3,17 +3,16 @@ const OfficeLocation = require('../models/OfficeLocation');
 const WeekOffConfig = require('../models/WeekOffConfig');
 const Holiday = require('../models/Holiday');
 const LeaveRequest = require('../models/LeaveRequest');
-const { calculateDistance, formatDate, calculateWorkingHours, logActivity } = require('../utils/helpers');
+const { calculateDistance, formatDate, calculateWorkingHours, logActivity, getCurrentTimeInTZ } = require('../utils/helpers');
 
 // ─────────────────────────────────────────────────────────────────
-// HELPER — format a Date object → "HH:MM" (24-hr) string
+// HELPER — format a Date object → "HH:MM" (24-hr) string in a specific timezone
 // ─────────────────────────────────────────────────────────────────
-const formatTime = (date) => {
+const { formatInTimeZone } = require('date-fns-tz');
+const formatTime = (date, tz = 'Asia/Kolkata') => {
   if (!date) return '--:--';
   const d = new Date(date);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${hh}:${mm}`;
+  return formatInTimeZone(d, tz, 'HH:mm');
 };
 
 // ─────────────────────────────────────────────────────────────────
@@ -48,6 +47,8 @@ const buildStats = (attendance) => {
 };
 
 
+const Company = require('../models/Company');
+
 // ═════════════════════════════════════════════════════════════════
 // @desc    Check In
 // @route   POST /api/attendance/checkin
@@ -75,8 +76,10 @@ const checkIn = async (req, res) => {
       });
     }
 
-    // ── 2. Prevent duplicate check-in for the same day ────────────
-    const today = formatDate(new Date());
+    // ── 2. Get Company Timezone & Determine "Today" ──────────────
+    const company = await Company.findById(req.user.companyId);
+    const tz = company?.timezone || 'Asia/Kolkata';
+    const today = formatDate(new Date(), tz);
 
     const existingAttendance = await Attendance.findOne({
       userId: req.user._id,
@@ -212,7 +215,9 @@ const checkOut = async (req, res) => {
     }
 
     // ── 2. Find today's check-in record ───────────────────────────
-    const today = formatDate(new Date());
+    const company = await Company.findById(req.user.companyId);
+    const tz = company?.timezone || 'Asia/Kolkata';
+    const today = formatDate(new Date(), tz);
 
     const attendance = await Attendance.findOne({
       userId: req.user._id,
@@ -350,7 +355,9 @@ const checkOut = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════
 const getTodayAttendance = async (req, res) => {
   try {
-    const today = formatDate(new Date());
+    const company = await Company.findById(req.user.companyId);
+    const tz = company?.timezone || 'Asia/Kolkata';
+    const today = formatDate(new Date(), tz);
 
     const attendance = await Attendance.findOne({
       userId: req.user._id,
@@ -388,6 +395,9 @@ const getAttendanceHistory = async (req, res) => {
 
     let dateFilter = {};
 
+    const company = await Company.findById(req.user.companyId);
+    const tz = company?.timezone || 'Asia/Kolkata';
+
     // ── Build date filter ─────────────────────────────────────────
     if (startDate && endDate) {
       // Explicit range takes priority
@@ -396,15 +406,15 @@ const getAttendanceHistory = async (req, res) => {
       const now = new Date();
 
       if (period === 'day') {
-        dateFilter = formatDate(now);
+        dateFilter = formatDate(now, tz);
       } else if (period === 'week') {
         const weekAgo = new Date(now);
         weekAgo.setDate(weekAgo.getDate() - 7);
-        dateFilter = { $gte: formatDate(weekAgo) };
+        dateFilter = { $gte: formatDate(weekAgo, tz) };
       } else if (period === 'month') {
         const monthAgo = new Date(now);
         monthAgo.setDate(monthAgo.getDate() - 30);
-        dateFilter = { $gte: formatDate(monthAgo) };
+        dateFilter = { $gte: formatDate(monthAgo, tz) };
       } else {
         return res.status(400).json({
           success: false,
@@ -469,6 +479,9 @@ const getAttendanceCalendar = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
 
+    const company = await Company.findById(req.user.companyId);
+    const tz = company?.timezone || 'Asia/Kolkata';
+
     let rangeStart;
     let rangeEnd;
 
@@ -479,8 +492,8 @@ const getAttendanceCalendar = async (req, res) => {
       const now = new Date();
       const first = new Date(now.getFullYear(), now.getMonth(), 1);
       const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      rangeStart = formatDate(first);
-      rangeEnd = formatDate(last);
+      rangeStart = formatDate(first, tz);
+      rangeEnd = formatDate(last, tz);
     }
 
     const weekOffConfig = await WeekOffConfig.findOne({
@@ -522,7 +535,7 @@ const getAttendanceCalendar = async (req, res) => {
       let current = new Date(leave.startDate);
       const last = new Date(leave.endDate);
       while (current <= last) {
-        const dateStr = formatDate(current);
+        const dateStr = formatDate(current, tz);
         leaveDates.add(dateStr);
         if (leave.leaveType) {
           leaveTypes.set(dateStr, leave.leaveType);
@@ -565,7 +578,7 @@ const getAttendanceCalendar = async (req, res) => {
     }
 
     while (cursor <= end) {
-      const dateStr = formatDate(cursor);
+      const dateStr = formatDate(cursor, tz);
       const weekday = cursor.getDay();
       const record = recordsByDate.get(dateStr);
       const holidayName = holidayMap.get(dateStr);

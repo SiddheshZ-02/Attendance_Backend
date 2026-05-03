@@ -6,6 +6,7 @@ const LeaveAllocation = require('../models/LeaveAllocation');
 const LeaveResetLog = require('../models/LeaveResetLog');
 const User = require('../models/User');
 const { logActivity } = require('../utils/helpers');
+const { formatInTimeZone } = require('date-fns-tz');
 
 // ═════════════════════════════════════════════════════════════════
 // @desc    Submit a new leave request
@@ -47,9 +48,14 @@ const submitLeaveRequest = async (req, res) => {
       return res.status(400).json({ success: false, code: 'INVALID_LEAVE_TYPE', message: 'Invalid or inactive leave type.' });
     }
 
+const Company = require('../models/Company');
+
+    const company = await Company.findById(req.user.companyId);
+    const tz = company?.timezone || 'Asia/Kolkata';
+
     const start = new Date(startDate);
     const end = new Date(endDate);
-    const currentYear = start.getFullYear().toString();
+    const currentYear = formatInTimeZone(start, tz, 'yyyy');
 
     if (payType === 'paid') {
       // 1. Check yearly EmployeeLeaveBalance

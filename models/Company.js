@@ -96,6 +96,10 @@ const companySchema = new mongoose.Schema(
       country: String,
       zipCode: String,
     },
+    timezone: {
+      type: String,
+      default: 'Asia/Kolkata',
+    },
     isDeleted: {
       type: Boolean,
       default: false,

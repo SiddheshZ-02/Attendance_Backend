@@ -1,3 +1,9 @@
+const { format, toDate } = require('date-fns');
+const { formatInTimeZone } = require('date-fns-tz');
+
+// Default timezone for the application
+const DEFAULT_TIMEZONE = 'Asia/Kolkata';
+
 // Calculate distance between two coordinates using Haversine formula
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
   const R = 6371e3; // Earth's radius in meters
@@ -37,20 +43,38 @@ const generateToken = (id, sessionId, authVersion = 0) => {
   return { accessToken, refreshToken };
 };
 
-// Format date to YYYY-MM-DD
-const formatDate = (date) => {
+/**
+ * Formats a date to YYYY-MM-DD in a specific timezone
+ * @param {Date|string|number} date 
+ * @param {string} tz Timezone (e.g., 'Asia/Kolkata')
+ * @returns {string} Formatted date string
+ */
+const formatDate = (date, tz = DEFAULT_TIMEZONE) => {
   const d = new Date(date);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return formatInTimeZone(d, tz, 'yyyy-MM-dd');
 };
 
-// Calculate working hours
+/**
+ * Calculates working hours between two dates
+ * @param {Date|string} checkInTime 
+ * @param {Date|string} checkOutTime 
+ * @returns {number} Hours as a decimal (e.g., 8.5)
+ */
 const calculateWorkingHours = (checkInTime, checkOutTime) => {
-  const diff = new Date(checkOutTime) - new Date(checkInTime);
+  const start = new Date(checkInTime);
+  const end = new Date(checkOutTime);
+  const diff = end.getTime() - start.getTime();
   const hours = diff / (1000 * 60 * 60);
   return Math.round(hours * 100) / 100;
+};
+
+/**
+ * Gets the current time in a specific timezone
+ * @param {string} tz 
+ * @returns {Date}
+ */
+const getCurrentTimeInTZ = (tz = DEFAULT_TIMEZONE) => {
+  return toDate(new Date(), { timeZone: tz });
 };
 
 // Log activity to the database
