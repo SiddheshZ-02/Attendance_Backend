@@ -3,7 +3,7 @@ const OfficeLocation = require('../models/OfficeLocation');
 const WeekOffConfig = require('../models/WeekOffConfig');
 const Holiday = require('../models/Holiday');
 const LeaveRequest = require('../models/LeaveRequest');
-const { calculateDistance, formatDate, calculateWorkingHours, logActivity, getCurrentTimeInTZ } = require('../utils/helpers');
+const { calculateDistance, formatDate, calculateWorkingHours, logActivity, getCurrentTimeInTZ, parseTimeInTZ } = require('../utils/helpers');
 
 // ─────────────────────────────────────────────────────────────────
 // HELPER — format a Date object → "HH:MM" (24-hr) string in a specific timezone
