@@ -787,6 +787,9 @@ const manualAttendanceEntry = async (req, res) => {
     }
 
     // ── 5. Prevent duplicate entries for the same date ────────────
+    const company = await Company.findById(req.user.companyId);
+    const tz = company?.timezone || 'Asia/Kolkata';
+
     const existingAttendance = await Attendance.findOne({
       userId: req.user._id,
       date: date,
@@ -802,7 +805,7 @@ const manualAttendanceEntry = async (req, res) => {
     }
 
     // ── 6. Parse and validate times ───────────────────────────────
-    const checkInDate = new Date(`${date}T${checkInTime}:00`);
+    const checkInDate = parseTimeInTZ(date, checkInTime, tz);
     
     if (isNaN(checkInDate.getTime())) {
       return res.status(400).json({
@@ -817,7 +820,7 @@ const manualAttendanceEntry = async (req, res) => {
     let status = 'checked-in';
 
     if (checkOutTime) {
-      checkOutDate = new Date(`${date}T${checkOutTime}:00`);
+      checkOutDate = parseTimeInTZ(date, checkOutTime, tz);
       
       if (isNaN(checkOutDate.getTime())) {
         return res.status(400).json({
@@ -961,11 +964,11 @@ const updateCheckOutTime = async (req, res) => {
     }
 
     // ── 5. Parse check-out time ───────────────────────────────────
+    const company = await Company.findById(req.user.companyId);
+    const tz = company?.timezone || 'Asia/Kolkata';
+
     const checkInDate = attendance.checkInTime;
-    const [outHours, outMinutes] = checkOutTime.split(':').map(Number);
-    
-    const checkOutDate = new Date(checkInDate);
-    checkOutDate.setHours(outHours, outMinutes, 0, 0);
+    const checkOutDate = parseTimeInTZ(date, checkOutTime, tz);
 
     // ── 6. Validate check-out is after check-in ───────────────────
     if (checkOutDate <= checkInDate) {

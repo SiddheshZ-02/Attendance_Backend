@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const fs = require('fs');
 const path = require('path');
 const User = require('../models/User');
+const Company = require('../models/Company');
 const { REFRESH_TOKEN_SECRET } = require('../config/authSecrets');
 const { generateToken, logActivity } = require('../utils/helpers');
 const { securityLogger } = require('../utils/logger');
@@ -174,10 +175,20 @@ const loginUser = async (req, res) => {
     user.lastLoginAt = new Date();
     await user.save();
 
+    // Fetch company timezone
+    let timezone = 'Asia/Kolkata';
+    if (user.companyId) {
+      const company = await Company.findById(user.companyId).select('timezone');
+      if (company && company.timezone) {
+        timezone = company.timezone;
+      }
+    }
+
     const response = {
       success: true,
       data: {
         ...sanitizeUser(user),
+        timezone,
         token: accessToken,
         refreshToken: refreshToken,
       },

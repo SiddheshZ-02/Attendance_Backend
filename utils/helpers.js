@@ -1,5 +1,5 @@
 const { format, toDate } = require('date-fns');
-const { formatInTimeZone } = require('date-fns-tz');
+const { formatInTimeZone, fromZonedTime } = require('date-fns-tz');
 
 // Default timezone for the application
 const DEFAULT_TIMEZONE = 'Asia/Kolkata';
@@ -44,6 +44,18 @@ const generateToken = (id, sessionId, authVersion = 0) => {
 };
 
 /**
+ * Parses a time string (HH:MM) for a given date in a specific timezone
+ * @param {string} dateStr YYYY-MM-DD
+ * @param {string} timeStr HH:MM
+ * @param {string} tz Timezone
+ * @returns {Date} UTC Date object
+ */
+const parseTimeInTZ = (dateStr, timeStr, tz = DEFAULT_TIMEZONE) => {
+  const dateTimeStr = `${dateStr} ${timeStr}`;
+  return fromZonedTime(dateTimeStr, tz);
+};
+
+/**
  * Formats a date to YYYY-MM-DD in a specific timezone
  * @param {Date|string|number} date 
  * @param {string} tz Timezone (e.g., 'Asia/Kolkata')
@@ -61,11 +73,12 @@ const formatDate = (date, tz = DEFAULT_TIMEZONE) => {
  * @returns {number} Hours as a decimal (e.g., 8.5)
  */
 const calculateWorkingHours = (checkInTime, checkOutTime) => {
+  if (!checkInTime || !checkOutTime) return 0;
   const start = new Date(checkInTime);
   const end = new Date(checkOutTime);
   const diff = end.getTime() - start.getTime();
   const hours = diff / (1000 * 60 * 60);
-  return Math.round(hours * 100) / 100;
+  return Math.max(0, Math.round(hours * 100) / 100);
 };
 
 /**
@@ -104,4 +117,6 @@ module.exports = {
   formatDate,
   calculateWorkingHours,
   logActivity,
+  parseTimeInTZ,
+  getCurrentTimeInTZ,
 };
